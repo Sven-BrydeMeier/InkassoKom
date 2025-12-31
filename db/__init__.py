@@ -1,5 +1,6 @@
 """
 Database module for NotarFlow
+SQLite compatible for Streamlit Cloud
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -10,11 +11,10 @@ import os
 from config.settings import settings
 from .models import Base
 
-# Create engine
+# Create engine - SQLite compatible
 engine = create_engine(
     settings.DATABASE_URL,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
+    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
     echo=settings.DEBUG
 )
 
@@ -48,3 +48,7 @@ def get_db_session() -> Generator[Session, None, None]:
         raise
     finally:
         db.close()
+
+
+# Auto-initialize database on import
+init_db()

@@ -15,52 +15,29 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     SECRET_KEY: str = "change-this-in-production-32-chars-min"
 
-    # Database
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/notarflow"
-    DATABASE_POOL_SIZE: int = 5
-    DATABASE_MAX_OVERFLOW: int = 10
-
-    # Redis (for Celery)
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # Database - SQLite for Streamlit Cloud compatibility
+    DATABASE_URL: str = "sqlite:///./notarflow.db"
 
     # Storage
-    STORAGE_TYPE: str = "local"  # local, s3
+    STORAGE_TYPE: str = "local"
     STORAGE_PATH: str = "./storage"
-    S3_BUCKET: Optional[str] = None
-    S3_ACCESS_KEY: Optional[str] = None
-    S3_SECRET_KEY: Optional[str] = None
-    S3_ENDPOINT: Optional[str] = None
-    S3_REGION: str = "eu-central-1"
-
-    # Encryption
-    ENCRYPTION_KEY: Optional[str] = None
 
     # OpenAI (optional AI Copilot)
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4-turbo-preview"
 
-    # Email
+    # Email (optional)
     SMTP_HOST: str = "localhost"
     SMTP_PORT: int = 587
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM_EMAIL: str = "noreply@notarflow.de"
-    SMTP_TLS: bool = True
-
-    # beA Connector (optional)
-    BEA_CONNECTOR_ENABLED: bool = False
-    BEA_CONNECTOR_URL: Optional[str] = None
-    BEA_CONNECTOR_API_KEY: Optional[str] = None
 
     # Session
     SESSION_EXPIRY_HOURS: int = 24
 
     # Limits
     MAX_UPLOAD_SIZE_MB: int = 50
-    OCR_ENABLED: bool = True
-
-    # Paths
-    TEMPLATE_DIR: str = "./templates"
 
     class Config:
         env_file = ".env"
