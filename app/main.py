@@ -4,6 +4,11 @@ Main Streamlit Application Entry Point
 """
 import streamlit as st
 from datetime import datetime
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Page configuration
 st.set_page_config(
@@ -14,7 +19,8 @@ st.set_page_config(
 )
 
 # Initialize database
-from db import init_db
+from db import init_db, get_db_session
+from db.models import User, Case, LedgerBooking
 init_db()
 
 # Custom CSS
@@ -42,8 +48,6 @@ if 'user' not in st.session_state:
 
 def login(email: str, password: str) -> bool:
     """Authenticate user."""
-    from db import get_db_session
-    from db.models import User
     from passlib.hash import bcrypt
 
     with get_db_session() as db:
@@ -119,7 +123,7 @@ def show_dashboard():
 
     # Sidebar
     with st.sidebar:
-        st.markdown(f"### ⚖️ NotarFlow")
+        st.markdown("### ⚖️ NotarFlow")
         st.caption(f"**{user.get('first_name')} {user.get('last_name')}**")
         st.caption(f"Rolle: {role.replace('_', ' ').title()}")
         st.divider()
@@ -143,39 +147,31 @@ def show_dashboard():
 
 def show_lawyer_dashboard():
     """Dashboard for lawyers."""
-    from db import get_db_session
-    from db.models import Case, LedgerBooking
-
     org_id = st.session_state.user.get('organization_id')
 
     st.markdown("## 📊 Kanzlei-Dashboard")
 
     with get_db_session() as db:
-        # Get cases
         cases = db.query(Case).filter(
             Case.organization_id == org_id,
             Case.is_deleted == False
         ).order_by(Case.created_at.desc()).limit(10).all()
 
-        # Stats
         total_cases = len(cases)
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Aktive Akten", total_cases)
         col2.metric("Mahnverfahren", sum(1 for c in cases if c.dunning_status != 'nicht_beantragt'))
         col3.metric("Vollstreckung", sum(1 for c in cases if c.enforcement_status != 'nicht_begonnen'))
-        col4.metric("Neu heute", sum(1 for c in cases if c.created_at.date() == datetime.now().date()))
+        col4.metric("Neu heute", sum(1 for c in cases if c.created_at and c.created_at.date() == datetime.now().date()))
 
     st.divider()
-
-    # Recent cases
     st.markdown("### 📁 Aktuelle Akten")
 
     if not cases:
-        st.info("Keine Akten vorhanden. Erstellen Sie eine neue Akte.")
+        st.info("Keine Akten vorhanden.")
         if st.button("➕ Neue Akte erstellen"):
             st.session_state.page = 'new_case'
-            st.rerun()
     else:
         for case in cases[:5]:
             with st.container():
@@ -184,22 +180,15 @@ def show_lawyer_dashboard():
                     st.markdown(f"**{case.internal_number}** - {case.debtor_name or 'Unbekannt'}")
                     st.caption(f"Gläubiger: {case.creditor_name or '-'}")
                 with col2:
-                    status_color = {
-                        'offen': '🟡', 'mahnverfahren': '🟠',
-                        'vollstreckung': '🔴', 'abgeschlossen': '🟢'
-                    }.get(case.status, '⚪')
-                    st.markdown(f"{status_color} {case.status.replace('_', ' ').title()}")
+                    status_color = {'offen': '🟡', 'mahnverfahren': '🟠', 'vollstreckung': '🔴', 'abgeschlossen': '🟢'}.get(case.status, '⚪')
+                    st.markdown(f"{status_color} {(case.status or 'offen').replace('_', ' ').title()}")
                 with col3:
-                    if st.button("Öffnen", key=f"case_{case.id}"):
-                        st.session_state.current_case = case.id
+                    st.button("Öffnen", key=f"case_{case.id}")
                 st.divider()
 
 
 def show_creditor_dashboard():
     """Dashboard for creditors."""
-    from db import get_db_session
-    from db.models import Case, LedgerBooking
-
     user_id = st.session_state.user.get('id')
 
     st.markdown("## 💼 Gläubiger-Dashboard")
@@ -214,12 +203,9 @@ def show_creditor_dashboard():
             st.info("Sie haben keine aktiven Forderungen.")
             return
 
-        # Calculate totals
         total_open = 0
         for case in cases:
-            bookings = db.query(LedgerBooking).filter(
-                LedgerBooking.case_id == case.id
-            ).all()
+            bookings = db.query(LedgerBooking).filter(LedgerBooking.case_id == case.id).all()
             soll = sum(b.amount for b in bookings if b.debit_credit == 'S')
             haben = sum(b.amount for b in bookings if b.debit_credit == 'H')
             total_open += (soll - haben)
@@ -236,9 +222,6 @@ def show_creditor_dashboard():
 
 def show_debtor_dashboard():
     """Dashboard for debtors."""
-    from db import get_db_session
-    from db.models import Case, LedgerBooking
-
     user_id = st.session_state.user.get('id')
 
     st.markdown("## 📋 Schuldner-Übersicht")
@@ -257,10 +240,7 @@ def show_debtor_dashboard():
             st.markdown(f"### Akte {case.internal_number}")
             st.caption(f"Gläubiger: {case.creditor_name}")
 
-            # Get balance
-            bookings = db.query(LedgerBooking).filter(
-                LedgerBooking.case_id == case.id
-            ).all()
+            bookings = db.query(LedgerBooking).filter(LedgerBooking.case_id == case.id).all()
             soll = sum(b.amount for b in bookings if b.debit_credit == 'S')
             haben = sum(b.amount for b in bookings if b.debit_credit == 'H')
             open_amount = soll - haben
@@ -269,7 +249,6 @@ def show_debtor_dashboard():
             col1.metric("Gesamtforderung", f"{soll:,.2f} €")
             col2.metric("Offener Betrag", f"{open_amount:,.2f} €")
 
-            # Progress
             if soll > 0:
                 progress = haben / soll
                 st.progress(min(progress, 1.0), text=f"{progress*100:.1f}% bezahlt")
