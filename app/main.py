@@ -1,77 +1,82 @@
 """
 NotarFlow - Inkasso-Kommunikationsplattform
 Main Streamlit Application Entry Point
-
-Mobile-optimized for Phone and iPad access
 """
 import streamlit as st
-import sys
-import os
+from datetime import datetime
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.utils.session import init_session, login, logout, get_current_user, get_user_display_name
-from app.utils.formatting import format_status_badge
-from app.utils.mobile_styles import inject_mobile_styles, inject_mobile_nav
-from config.settings import settings, UserRole
-
-# Page configuration - mobile optimized
+# Page configuration
 st.set_page_config(
     page_title="NotarFlow - Inkasso-Plattform",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="collapsed"  # Collapsed by default for mobile
+    initial_sidebar_state="collapsed"
 )
+
+# Initialize database
+from db import init_db
+init_db()
 
 # Custom CSS
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2rem;
-        font-weight: bold;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    .status-badge {
-        padding: 0.25rem 0.5rem;
-        border-radius: 0.25rem;
-        font-size: 0.875rem;
-    }
-    .timeline-item {
-        border-left: 2px solid #ddd;
-        padding-left: 1rem;
-        margin-left: 0.5rem;
-    }
-    .case-card {
-        border: 1px solid #ddd;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-bottom: 0.5rem;
-    }
-    .case-card:hover {
-        background-color: #f8f9fa;
+    .main-header { font-size: 2rem; font-weight: bold; margin-bottom: 1rem; }
+    .metric-card { background-color: #f0f2f6; padding: 1rem; border-radius: 0.5rem; }
+    .status-badge { padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem; }
+    .case-card { border: 1px solid #ddd; padding: 1rem; border-radius: 0.5rem; margin-bottom: 0.5rem; }
+
+    /* Mobile styles */
+    @media (max-width: 768px) {
+        .main .block-container { padding: 1rem 0.5rem !important; }
+        .stButton > button { min-height: 48px !important; width: 100% !important; }
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Inject mobile-optimized styles
-inject_mobile_styles()
+# Session state initialization
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user' not in st.session_state:
+    st.session_state.user = None
 
-# Initialize session
-init_session()
+
+def login(email: str, password: str) -> bool:
+    """Authenticate user."""
+    from db import get_db_session
+    from db.models import User
+    from passlib.hash import bcrypt
+
+    with get_db_session() as db:
+        user = db.query(User).filter(
+            User.email == email,
+            User.is_active == True,
+            User.is_deleted == False
+        ).first()
+
+        if user and bcrypt.verify(password, user.password_hash):
+            st.session_state.authenticated = True
+            st.session_state.user = {
+                'id': user.id,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'role': user.role,
+                'organization_id': user.organization_id
+            }
+            return True
+    return False
+
+
+def logout():
+    """Log out user."""
+    st.session_state.authenticated = False
+    st.session_state.user = None
 
 
 def show_login_page():
     """Display the login page."""
     st.markdown("# ⚖️ NotarFlow")
     st.markdown("### Inkasso-Kommunikationsplattform")
-
     st.divider()
 
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -82,7 +87,6 @@ def show_login_page():
         with st.form("login_form"):
             email = st.text_input("E-Mail", placeholder="ihre@email.de")
             password = st.text_input("Passwort", type="password")
-
             submitted = st.form_submit_button("Anmelden", use_container_width=True)
 
             if submitted:
@@ -97,36 +101,27 @@ def show_login_page():
 
         st.divider()
 
-        st.caption("© 2024 NotarFlow - Alle Rechte vorbehalten")
-        st.caption("DSGVO-konform | Kanzlei-Standard Sicherheit")
+        # Demo accounts info
+        with st.expander("Demo-Zugänge"):
+            st.markdown("""
+            **Rechtsanwalt:** ra@kanzlei-mueller.de / demo123
+            **Gläubigerin:** erika@mustermann-gmbh.de / demo123
+            **Schuldner:** max@example.de / demo123
+            """)
+
+        st.caption("© 2024 NotarFlow - DSGVO-konform")
 
 
-def show_main_app():
-    """Display the main application based on user role."""
-    user = get_current_user()
-
-    if not user:
-        show_login_page()
-        return
-
+def show_dashboard():
+    """Show main dashboard based on user role."""
+    user = st.session_state.user
     role = user.get('role', '')
 
     # Sidebar
     with st.sidebar:
         st.markdown(f"### ⚖️ NotarFlow")
-        st.caption(f"Angemeldet als: **{get_user_display_name()}**")
+        st.caption(f"**{user.get('first_name')} {user.get('last_name')}**")
         st.caption(f"Rolle: {role.replace('_', ' ').title()}")
-
-        st.divider()
-
-        # Navigation based on role
-        if role in [UserRole.ADMIN, UserRole.RECHTSANWALT]:
-            show_lawyer_navigation()
-        elif role == UserRole.GLAEUBIGERIN:
-            show_creditor_navigation()
-        elif role == UserRole.SCHULDNER:
-            show_debtor_navigation()
-
         st.divider()
 
         if st.button("🚪 Abmelden", use_container_width=True):
@@ -134,301 +129,125 @@ def show_main_app():
             st.rerun()
 
     # Main content
-    st.markdown(f"# Willkommen, {get_user_display_name()}")
+    st.markdown(f"# Willkommen, {user.get('first_name')}!")
 
-    if role in [UserRole.ADMIN, UserRole.RECHTSANWALT]:
+    if role in ['admin', 'rechtsanwalt']:
         show_lawyer_dashboard()
-    elif role == UserRole.GLAEUBIGERIN:
+    elif role == 'glaeubigerin':
         show_creditor_dashboard()
-    elif role == UserRole.SCHULDNER:
+    elif role == 'schuldner':
         show_debtor_dashboard()
-
-    # Inject mobile bottom navigation
-    inject_mobile_nav(role)
-
-
-def show_lawyer_navigation():
-    """Show navigation for lawyers."""
-    st.markdown("### 📋 Navigation")
-
-    if st.button("📊 Dashboard", use_container_width=True):
-        st.session_state.page = 'dashboard'
-        st.rerun()
-
-    if st.button("📁 Aktenregister", use_container_width=True):
-        st.session_state.page = 'cases'
-        st.rerun()
-
-    if st.button("📬 Posteingang", use_container_width=True):
-        st.session_state.page = 'inbox'
-        st.rerun()
-
-    if st.button("⚖️ Mahnverfahren", use_container_width=True):
-        st.session_state.page = 'dunning'
-        st.rerun()
-
-    if st.button("🏛️ Vollstreckung", use_container_width=True):
-        st.session_state.page = 'enforcement'
-        st.rerun()
-
-    if st.button("⚙️ Einstellungen", use_container_width=True):
-        st.session_state.page = 'settings'
-        st.rerun()
-
-
-def show_creditor_navigation():
-    """Show navigation for creditors."""
-    st.markdown("### 📋 Navigation")
-
-    if st.button("📊 Aktuelles", use_container_width=True):
-        st.session_state.page = 'dashboard'
-        st.rerun()
-
-    if st.button("💰 Forderungen", use_container_width=True):
-        st.session_state.page = 'claims'
-        st.rerun()
-
-    if st.button("💳 Zahlungseingänge", use_container_width=True):
-        st.session_state.page = 'payments'
-        st.rerun()
-
-
-def show_debtor_navigation():
-    """Show navigation for debtors."""
-    st.markdown("### 📋 Navigation")
-
-    if st.button("📊 Übersicht", use_container_width=True):
-        st.session_state.page = 'dashboard'
-        st.rerun()
-
-    if st.button("📄 Dokumente", use_container_width=True):
-        st.session_state.page = 'documents'
-        st.rerun()
-
-    if st.button("📅 Ratenzahlung", use_container_width=True):
-        st.session_state.page = 'payment_plan'
-        st.rerun()
+    else:
+        st.info("Keine Dashboard-Ansicht für diese Rolle.")
 
 
 def show_lawyer_dashboard():
-    """Show dashboard for lawyers."""
+    """Dashboard for lawyers."""
     from db import get_db_session
-    from backend.services.case_service import CaseService
-    from backend.services.notification_service import NotificationService
-    from backend.services.limitation_service import LimitationService
-    from app.utils.session import get_organization_id, get_user_id
+    from db.models import Case, LedgerBooking
 
-    org_id = get_organization_id()
-    user_id = get_user_id()
+    org_id = st.session_state.user.get('organization_id')
 
-    if not org_id:
-        st.warning("Keine Organisation zugeordnet.")
-        return
-
-    # Quick stats
-    st.markdown("## 📊 Dashboard")
+    st.markdown("## 📊 Kanzlei-Dashboard")
 
     with get_db_session() as db:
-        case_service = CaseService(db)
-        notification_service = NotificationService(db)
-        limitation_service = LimitationService(db)
+        # Get cases
+        cases = db.query(Case).filter(
+            Case.organization_id == org_id,
+            Case.is_deleted == False
+        ).order_by(Case.created_at.desc()).limit(10).all()
 
-        # Get statistics
-        stats = case_service.get_organization_statistics(org_id)
+        # Stats
+        total_cases = len(cases)
 
         col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric("Aktive Akten", stats.get('total_cases', 0))
-
-        with col2:
-            from app.utils.formatting import format_currency
-            st.metric("Gesamtforderungen", format_currency(stats.get('total_open', 0)))
-
-        with col3:
-            # Get pending inbox items
-            from backend.services.document_service import DocumentService
-            doc_service = DocumentService(db)
-            inbox_items = doc_service.get_inbox_items(org_id, status='new')
-            st.metric("Posteingang", len(inbox_items))
-
-        with col4:
-            notifications = notification_service.get_unread_notifications(user_id)
-            st.metric("Benachrichtigungen", len(notifications))
+        col1.metric("Aktive Akten", total_cases)
+        col2.metric("Mahnverfahren", sum(1 for c in cases if c.dunning_status != 'nicht_beantragt'))
+        col3.metric("Vollstreckung", sum(1 for c in cases if c.enforcement_status != 'nicht_begonnen'))
+        col4.metric("Neu heute", sum(1 for c in cases if c.created_at.date() == datetime.now().date()))
 
     st.divider()
 
-    # Tabs for different sections
-    tab1, tab2, tab3, tab4 = st.tabs(["📌 Aktuelles", "⚠️ Verjährungswarnungen", "📬 Posteingang", "📊 Statistiken"])
+    # Recent cases
+    st.markdown("### 📁 Aktuelle Akten")
 
-    with tab1:
-        show_activity_feed(org_id, user_id)
-
-    with tab2:
-        show_limitation_warnings(org_id)
-
-    with tab3:
-        show_inbox_preview(org_id)
-
-    with tab4:
-        show_statistics(org_id)
-
-
-def show_activity_feed(org_id, user_id):
-    """Show recent activity feed."""
-    from db import get_db_session
-    from backend.services.notification_service import NotificationService
-
-    st.markdown("### 📌 Aktuelle Ereignisse")
-
-    with get_db_session() as db:
-        notification_service = NotificationService(db)
-        feed = notification_service.get_activity_feed(
-            user_id=user_id,
-            organization_id=org_id,
-            limit=20
-        )
-
-        if not feed:
-            st.info("Keine aktuellen Ereignisse.")
-        else:
-            from app.utils.components import show_timeline
-            show_timeline(feed, max_items=10)
-
-
-def show_limitation_warnings(org_id):
-    """Show limitation warnings."""
-    from db import get_db_session
-    from backend.services.limitation_service import LimitationService
-    from app.utils.components import show_limitation_warning
-
-    st.markdown("### ⚠️ Verjährungswarnungen")
-
-    with get_db_session() as db:
-        limitation_service = LimitationService(db)
-        warnings = limitation_service.check_all_cases_limitation(org_id, warning_months=6)
-
-        if not warnings:
-            st.success("Keine drohenden Verjährungen in den nächsten 6 Monaten.")
-        else:
-            for warning in warnings[:10]:
-                show_limitation_warning(
-                    warning['days_remaining'],
-                    warning['internal_number']
-                )
-
-
-def show_inbox_preview(org_id):
-    """Show inbox preview."""
-    from db import get_db_session
-    from backend.services.document_service import DocumentService
-    from app.utils.formatting import format_datetime
-
-    st.markdown("### 📬 Neuer Posteingang")
-
-    with get_db_session() as db:
-        doc_service = DocumentService(db)
-        inbox_items = doc_service.get_inbox_items(org_id, status='new')
-
-        if not inbox_items:
-            st.success("Posteingang ist leer.")
-        else:
-            for item in inbox_items[:5]:
-                doc = doc_service.get_document(item.document_id)
-                if doc:
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        st.markdown(f"📄 **{doc.original_filename}**")
-                        st.caption(f"Eingegangen: {format_datetime(item.received_at)}")
-                    with col2:
-                        if st.button("Bearbeiten", key=f"inbox_{item.id}"):
-                            st.session_state.current_inbox_item = str(item.id)
-                            st.session_state.page = 'inbox'
-                            st.rerun()
-                    st.divider()
-
-
-def show_statistics(org_id):
-    """Show case statistics."""
-    from db import get_db_session
-    from backend.services.case_service import CaseService
-
-    st.markdown("### 📊 Statistiken")
-
-    with get_db_session() as db:
-        case_service = CaseService(db)
-        stats = case_service.get_organization_statistics(org_id)
-
-        status_counts = stats.get('status_counts', {})
-
-        if status_counts:
-            import pandas as pd
-
-            df = pd.DataFrame([
-                {"Status": k.replace('_', ' ').title(), "Anzahl": v}
-                for k, v in status_counts.items()
-            ])
-
-            st.bar_chart(df.set_index('Status'))
+    if not cases:
+        st.info("Keine Akten vorhanden. Erstellen Sie eine neue Akte.")
+        if st.button("➕ Neue Akte erstellen"):
+            st.session_state.page = 'new_case'
+            st.rerun()
+    else:
+        for case in cases[:5]:
+            with st.container():
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.markdown(f"**{case.internal_number}** - {case.debtor_name or 'Unbekannt'}")
+                    st.caption(f"Gläubiger: {case.creditor_name or '-'}")
+                with col2:
+                    status_color = {
+                        'offen': '🟡', 'mahnverfahren': '🟠',
+                        'vollstreckung': '🔴', 'abgeschlossen': '🟢'
+                    }.get(case.status, '⚪')
+                    st.markdown(f"{status_color} {case.status.replace('_', ' ').title()}")
+                with col3:
+                    if st.button("Öffnen", key=f"case_{case.id}"):
+                        st.session_state.current_case = case.id
+                st.divider()
 
 
 def show_creditor_dashboard():
-    """Show dashboard for creditors."""
+    """Dashboard for creditors."""
     from db import get_db_session
-    from backend.services.case_service import CaseService
-    from app.utils.session import get_user_id
-    from app.utils.components import show_case_card, show_balance_card
-    from app.utils.formatting import format_currency
+    from db.models import Case, LedgerBooking
 
-    user_id = get_user_id()
+    user_id = st.session_state.user.get('id')
 
-    st.markdown("## 📊 Aktuelles")
+    st.markdown("## 💼 Gläubiger-Dashboard")
 
     with get_db_session() as db:
-        case_service = CaseService(db)
-        cases = case_service.get_cases_for_creditor(user_id)
+        cases = db.query(Case).filter(
+            Case.creditor_user_id == user_id,
+            Case.is_deleted == False
+        ).all()
 
         if not cases:
             st.info("Sie haben keine aktiven Forderungen.")
             return
 
-        # Summary
+        # Calculate totals
         total_open = 0
         for case in cases:
-            summary = case_service.get_case_summary(case.id)
-            balance = summary.get('balance', {})
-            total_open += balance.get('total_open', 0)
+            bookings = db.query(LedgerBooking).filter(
+                LedgerBooking.case_id == case.id
+            ).all()
+            soll = sum(b.amount for b in bookings if b.debit_credit == 'S')
+            haben = sum(b.amount for b in bookings if b.debit_credit == 'H')
+            total_open += (soll - haben)
 
-        st.metric("Gesamtforderungen", format_currency(total_open))
-
+        st.metric("Offene Gesamtforderung", f"{total_open:,.2f} €")
         st.divider()
 
-        # Cases list
         st.markdown("### 💰 Ihre Forderungen")
-
         for case in cases:
-            summary = case_service.get_case_summary(case.id)
-            show_case_card(summary)
+            with st.expander(f"Akte {case.internal_number} - {case.debtor_name}"):
+                st.write(f"Status: {case.status}")
+                st.write(f"Mahnverfahren: {case.dunning_status}")
 
 
 def show_debtor_dashboard():
-    """Show dashboard for debtors."""
+    """Dashboard for debtors."""
     from db import get_db_session
-    from backend.services.case_service import CaseService
-    from backend.services.ledger_service import LedgerService
-    from app.utils.session import get_user_id
-    from app.utils.components import show_payment_progress, show_balance_card
-    from app.utils.formatting import format_currency
+    from db.models import Case, LedgerBooking
 
-    user_id = get_user_id()
+    user_id = st.session_state.user.get('id')
 
-    st.markdown("## 📊 Übersicht")
+    st.markdown("## 📋 Schuldner-Übersicht")
 
     with get_db_session() as db:
-        case_service = CaseService(db)
-        ledger_service = LedgerService(db)
-
-        cases = case_service.get_cases_for_debtor(user_id)
+        cases = db.query(Case).filter(
+            Case.debtor_user_id == user_id,
+            Case.is_deleted == False
+        ).all()
 
         if not cases:
             st.success("Keine offenen Forderungen.")
@@ -438,24 +257,28 @@ def show_debtor_dashboard():
             st.markdown(f"### Akte {case.internal_number}")
             st.caption(f"Gläubiger: {case.creditor_name}")
 
-            balance = ledger_service.get_case_balance(case.id)
+            # Get balance
+            bookings = db.query(LedgerBooking).filter(
+                LedgerBooking.case_id == case.id
+            ).all()
+            soll = sum(b.amount for b in bookings if b.debit_credit == 'S')
+            haben = sum(b.amount for b in bookings if b.debit_credit == 'H')
+            open_amount = soll - haben
 
-            total_soll = balance.get('total_soll', 0)
-            total_haben = balance.get('total_haben', 0)
-            total_open = balance.get('total_open', 0)
+            col1, col2 = st.columns(2)
+            col1.metric("Gesamtforderung", f"{soll:,.2f} €")
+            col2.metric("Offener Betrag", f"{open_amount:,.2f} €")
 
-            # Show progress
-            show_payment_progress(
-                total_amount=total_soll,
-                paid_amount=total_haben
-            )
+            # Progress
+            if soll > 0:
+                progress = haben / soll
+                st.progress(min(progress, 1.0), text=f"{progress*100:.1f}% bezahlt")
 
             st.divider()
 
 
 # Main entry point
-if __name__ == "__main__":
-    if st.session_state.get('authenticated'):
-        show_main_app()
-    else:
-        show_login_page()
+if st.session_state.authenticated:
+    show_dashboard()
+else:
+    show_login_page()
