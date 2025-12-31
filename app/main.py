@@ -1,6 +1,8 @@
 """
 NotarFlow - Inkasso-Kommunikationsplattform
 Main Streamlit Application Entry Point
+
+Mobile-optimized for Phone and iPad access
 """
 import streamlit as st
 import sys
@@ -11,14 +13,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.utils.session import init_session, login, logout, get_current_user, get_user_display_name
 from app.utils.formatting import format_status_badge
+from app.utils.mobile_styles import inject_mobile_styles, inject_mobile_nav
 from config.settings import settings, UserRole
 
-# Page configuration
+# Page configuration - mobile optimized
 st.set_page_config(
     page_title="NotarFlow - Inkasso-Plattform",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # Collapsed by default for mobile
 )
 
 # Custom CSS
@@ -56,6 +59,9 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Inject mobile-optimized styles
+inject_mobile_styles()
 
 # Initialize session
 init_session()
@@ -136,6 +142,9 @@ def show_main_app():
         show_creditor_dashboard()
     elif role == UserRole.SCHULDNER:
         show_debtor_dashboard()
+
+    # Inject mobile bottom navigation
+    inject_mobile_nav(role)
 
 
 def show_lawyer_navigation():
