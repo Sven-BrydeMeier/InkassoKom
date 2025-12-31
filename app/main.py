@@ -86,32 +86,68 @@ def show_login_page():
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
-        st.markdown("#### Anmeldung")
+        st.markdown("#### 🔓 Demo-Zugang (Testphase)")
+        st.info("Wählen Sie eine Rolle zum Testen:")
 
-        with st.form("login_form"):
-            email = st.text_input("E-Mail", placeholder="ihre@email.de")
-            password = st.text_input("Passwort", type="password")
-            submitted = st.form_submit_button("Anmelden", use_container_width=True)
+        col_a, col_b, col_c = st.columns(3)
 
-            if submitted:
-                if email and password:
-                    if login(email, password):
-                        st.success("Erfolgreich angemeldet!")
-                        st.rerun()
-                    else:
-                        st.error("Ungültige Anmeldedaten.")
-                else:
-                    st.warning("Bitte E-Mail und Passwort eingeben.")
+        with col_a:
+            if st.button("👨‍⚖️ Rechtsanwalt", use_container_width=True):
+                st.session_state.authenticated = True
+                st.session_state.user = {
+                    'id': 'demo-lawyer-001',
+                    'email': 'ra@demo.de',
+                    'first_name': 'Thomas',
+                    'last_name': 'Müller',
+                    'role': 'rechtsanwalt',
+                    'organization_id': 'demo-org-001'
+                }
+                st.rerun()
+
+        with col_b:
+            if st.button("💼 Gläubigerin", use_container_width=True):
+                st.session_state.authenticated = True
+                st.session_state.user = {
+                    'id': 'demo-creditor-001',
+                    'email': 'glaeubiger@demo.de',
+                    'first_name': 'Erika',
+                    'last_name': 'Mustermann',
+                    'role': 'glaeubigerin',
+                    'organization_id': 'demo-org-001'
+                }
+                st.rerun()
+
+        with col_c:
+            if st.button("👤 Schuldner", use_container_width=True):
+                st.session_state.authenticated = True
+                st.session_state.user = {
+                    'id': 'demo-debtor-001',
+                    'email': 'schuldner@demo.de',
+                    'first_name': 'Max',
+                    'last_name': 'Schmidt',
+                    'role': 'schuldner',
+                    'organization_id': 'demo-org-001'
+                }
+                st.rerun()
 
         st.divider()
 
-        # Demo accounts info
-        with st.expander("Demo-Zugänge"):
-            st.markdown("""
-            **Rechtsanwalt:** ra@kanzlei-mueller.de / demo123
-            **Gläubigerin:** erika@mustermann-gmbh.de / demo123
-            **Schuldner:** max@example.de / demo123
-            """)
+        # Optional: Regular login form (collapsed)
+        with st.expander("🔐 Anmeldung mit Zugangsdaten"):
+            with st.form("login_form"):
+                email = st.text_input("E-Mail", placeholder="ihre@email.de")
+                password = st.text_input("Passwort", type="password")
+                submitted = st.form_submit_button("Anmelden", use_container_width=True)
+
+                if submitted:
+                    if email and password:
+                        if login(email, password):
+                            st.success("Erfolgreich angemeldet!")
+                            st.rerun()
+                        else:
+                            st.error("Ungültige Anmeldedaten.")
+                    else:
+                        st.warning("Bitte E-Mail und Passwort eingeben.")
 
         st.caption("© 2024 NotarFlow - DSGVO-konform")
 
