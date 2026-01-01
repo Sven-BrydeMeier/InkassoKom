@@ -743,7 +743,7 @@ def show_lawyer_overview():
     with col1:
         sort_by = st.selectbox(
             "Sortieren nach",
-            ["Status", "Aktenzeichen", "Forderungshöhe", "Schuldner"],
+            ["Status", "Zahlungsstatus (offen→bezahlt)", "Aktenzeichen", "Forderungshöhe", "Schuldner"],
             key="dashboard_sort"
         )
     with col2:
@@ -756,6 +756,15 @@ def show_lawyer_overview():
     sorted_cases = DEMO_CASES.copy()
     if sort_by == "Status":
         sorted_cases.sort(key=lambda x: status_order.get(x['status'], 99), reverse=reverse)
+    elif sort_by == "Zahlungsstatus (offen→bezahlt)":
+        # Sortieren nach offenem Betrag (höchster offen zuerst, bezahlt zuletzt)
+        def get_payment_status(case):
+            s, h, o = get_balance(case['id'])
+            if s == 0:
+                return 0  # Keine Forderung
+            payment_ratio = h / s  # 0 = nichts bezahlt, 1 = vollständig bezahlt
+            return payment_ratio
+        sorted_cases.sort(key=get_payment_status, reverse=reverse)
     elif sort_by == "Aktenzeichen":
         sorted_cases.sort(key=lambda x: x['nr'], reverse=reverse)
     elif sort_by == "Forderungshöhe":
