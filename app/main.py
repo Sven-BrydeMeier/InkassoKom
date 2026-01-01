@@ -93,6 +93,72 @@ DEMO_BOOKINGS = {
 
 def fmt_curr(amt): return f"{amt:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 def fmt_date(d): return d.strftime("%d.%m.%Y") if d else "-"
+
+# RVG Gebührentabelle (vereinfacht, Stand 2024)
+RVG_TABELLE = [
+    (500, 49.00),
+    (1000, 88.00),
+    (1500, 127.00),
+    (2000, 166.00),
+    (3000, 222.00),
+    (4000, 278.00),
+    (5000, 334.00),
+    (6000, 390.00),
+    (7000, 446.00),
+    (8000, 502.00),
+    (9000, 558.00),
+    (10000, 614.00),
+    (13000, 666.00),
+    (16000, 718.00),
+    (19000, 770.00),
+    (22000, 822.00),
+    (25000, 874.00),
+    (30000, 955.00),
+    (35000, 1036.00),
+    (40000, 1117.00),
+    (45000, 1198.00),
+    (50000, 1279.00),
+    (65000, 1373.00),
+    (80000, 1467.00),
+    (95000, 1561.00),
+    (110000, 1655.00),
+    (125000, 1749.00),
+    (140000, 1843.00),
+    (155000, 1937.00),
+    (170000, 2031.00),
+    (185000, 2125.00),
+    (200000, 2219.00),
+]
+
+def calculate_rvg_gebuehr(streitwert: float) -> float:
+    """Berechnet die RVG-Gebühr basierend auf dem Streitwert"""
+    for grenze, gebuehr in RVG_TABELLE:
+        if streitwert <= grenze:
+            return gebuehr
+    # Für höhere Streitwerte: letzte Gebühr + Zuschlag
+    return RVG_TABELLE[-1][1] + ((streitwert - RVG_TABELLE[-1][0]) / 5000) * 94
+
+def calculate_ra_kosten(streitwert: float, gebuehrensatz: float = 1.3) -> dict:
+    """
+    Berechnet RA-Kosten nach RVG
+    gebuehrensatz: z.B. 1.3 für Geschäftsgebühr, 1.5 für erhöhte Gebühr
+    """
+    grund_gebuehr = calculate_rvg_gebuehr(streitwert)
+    geschaefts_gebuehr = round(grund_gebuehr * gebuehrensatz, 2)
+    auslagenpauschale = round(min(geschaefts_gebuehr * 0.20, 20.00), 2)  # Max 20€
+    ust = round((geschaefts_gebuehr + auslagenpauschale) * 0.19, 2)
+    gesamt = round(geschaefts_gebuehr + auslagenpauschale + ust, 2)
+
+    return {
+        'streitwert': streitwert,
+        'grund_gebuehr': grund_gebuehr,
+        'gebuehrensatz': gebuehrensatz,
+        'geschaefts_gebuehr': geschaefts_gebuehr,
+        'auslagenpauschale': auslagenpauschale,
+        'ust': ust,
+        'gesamt': gesamt
+    }
+
 def get_balance(case_id):
     b = DEMO_BOOKINGS.get(case_id, [])
     s = sum(x['amount'] for x in b if x['type'] == 'S')
@@ -671,9 +737,35 @@ def show_lawyer_overview():
     st.metric("💰 Gesamtforderungen", fmt_curr(total_claims))
 
     st.divider()
+
+    # Sortierung und Filter
+    col1, col2 = st.columns([2, 2])
+    with col1:
+        sort_by = st.selectbox(
+            "Sortieren nach",
+            ["Status", "Aktenzeichen", "Forderungshöhe", "Schuldner"],
+            key="dashboard_sort"
+        )
+    with col2:
+        sort_order = st.radio("Reihenfolge", ["Aufsteigend", "Absteigend"], horizontal=True, key="dashboard_order")
+
+    # Sortierlogik
+    status_order = {'offen': 1, 'mahnverfahren': 2, 'vollstreckung': 3, 'abgeschlossen': 4}
+    reverse = sort_order == "Absteigend"
+
+    sorted_cases = DEMO_CASES.copy()
+    if sort_by == "Status":
+        sorted_cases.sort(key=lambda x: status_order.get(x['status'], 99), reverse=reverse)
+    elif sort_by == "Aktenzeichen":
+        sorted_cases.sort(key=lambda x: x['nr'], reverse=reverse)
+    elif sort_by == "Forderungshöhe":
+        sorted_cases.sort(key=lambda x: x['principal'], reverse=reverse)
+    elif sort_by == "Schuldner":
+        sorted_cases.sort(key=lambda x: x['debtor'], reverse=reverse)
+
     st.markdown("### 📁 Aktuelle Akten")
 
-    for case in DEMO_CASES:
+    for case in sorted_cases:
         s, h, o = get_balance(case['id'])
         status_icons = {'offen': '🟡', 'mahnverfahren': '🟠', 'vollstreckung': '🔴', 'abgeschlossen': '🟢'}
 
@@ -815,11 +907,167 @@ def show_case_detail():
 
         st.divider()
         st.markdown("### ⚡ Aktionen")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.button("📝 Mahnung", use_container_width=True)
-        c2.button("⚖️ MB beantragen", use_container_width=True)
-        c3.button("💳 Zahlung buchen", use_container_width=True)
-        c4.button("📄 Upload", use_container_width=True)
+
+        # Session State für Dialoge
+        if f'show_mahnung_{case_id}' not in st.session_state:
+            st.session_state[f'show_mahnung_{case_id}'] = False
+        if f'show_mb_{case_id}' not in st.session_state:
+            st.session_state[f'show_mb_{case_id}'] = False
+        if f'show_zahlung_{case_id}' not in st.session_state:
+            st.session_state[f'show_zahlung_{case_id}'] = False
+        if f'show_ra_calc_{case_id}' not in st.session_state:
+            st.session_state[f'show_ra_calc_{case_id}'] = False
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        if c1.button("📝 Mahnung", use_container_width=True, key=f"btn_mahn_{case_id}"):
+            st.session_state[f'show_mahnung_{case_id}'] = True
+        if c2.button("⚖️ MB beantragen", use_container_width=True, key=f"btn_mb_{case_id}"):
+            st.session_state[f'show_mb_{case_id}'] = True
+        if c3.button("💳 Zahlung", use_container_width=True, key=f"btn_zahl_{case_id}"):
+            st.session_state[f'show_zahlung_{case_id}'] = True
+        if c4.button("💶 RA-Gebühren", use_container_width=True, key=f"btn_rag_{case_id}"):
+            st.session_state[f'show_ra_calc_{case_id}'] = True
+        if c5.button("📄 Upload", use_container_width=True, key=f"btn_upl_{case_id}"):
+            st.session_state.page = 'case_detail'  # Scroll to documents tab
+
+        # Mahnung Dialog
+        if st.session_state.get(f'show_mahnung_{case_id}', False):
+            with st.expander("📝 Mahnung erstellen", expanded=True):
+                st.markdown("#### Mahnschreiben generieren")
+                mahn_nr = st.selectbox("Mahnung Nr.", [1, 2, 3], key=f"mahn_nr_{case_id}")
+                mahn_frist = st.number_input("Zahlungsfrist (Tage)", min_value=7, max_value=30, value=14, key=f"mahn_frist_{case_id}")
+                mahn_text = st.text_area("Zusätzlicher Text", placeholder="Optional: Individueller Text für die Mahnung...", key=f"mahn_text_{case_id}")
+
+                col1, col2 = st.columns(2)
+                if col1.button("✅ Mahnung erstellen", type="primary", key=f"mahn_create_{case_id}"):
+                    st.success(f"✅ {mahn_nr}. Mahnung für {case['debtor']} erstellt! Frist: {mahn_frist} Tage")
+                    st.session_state[f'show_mahnung_{case_id}'] = False
+                    st.rerun()
+                if col2.button("❌ Abbrechen", key=f"mahn_cancel_{case_id}"):
+                    st.session_state[f'show_mahnung_{case_id}'] = False
+                    st.rerun()
+
+        # MB beantragen Dialog
+        if st.session_state.get(f'show_mb_{case_id}', False):
+            with st.expander("⚖️ Mahnbescheid beantragen", expanded=True):
+                st.markdown("#### Antrag auf Erlass eines Mahnbescheids")
+                st.info(f"**Schuldner:** {case['debtor']}\n**Hauptforderung:** {fmt_curr(case['principal'])}")
+
+                # Gerichtskosten berechnen
+                gk = 32.00 if case['principal'] <= 1000 else 36.00 if case['principal'] <= 2000 else 43.00
+                st.write(f"**Gerichtskosten (ca.):** {fmt_curr(gk)}")
+
+                mb_mahngericht = st.selectbox("Mahngericht", ["Berlin-Wedding", "Coburg", "Stuttgart", "Hagen", "Hamburg"], key=f"mb_gericht_{case_id}")
+                mb_zinsen = st.checkbox("Verzugszinsen geltend machen", value=True, key=f"mb_zinsen_{case_id}")
+
+                col1, col2 = st.columns(2)
+                if col1.button("📤 MB beantragen", type="primary", key=f"mb_create_{case_id}"):
+                    st.success(f"✅ Mahnbescheid beim AG {mb_mahngericht} beantragt!")
+                    st.session_state[f'show_mb_{case_id}'] = False
+                    st.rerun()
+                if col2.button("❌ Abbrechen", key=f"mb_cancel_{case_id}"):
+                    st.session_state[f'show_mb_{case_id}'] = False
+                    st.rerun()
+
+        # Zahlung buchen Dialog
+        if st.session_state.get(f'show_zahlung_{case_id}', False):
+            with st.expander("💳 Zahlung buchen", expanded=True):
+                st.markdown("#### Zahlungseingang verbuchen")
+
+                z_col1, z_col2 = st.columns(2)
+                with z_col1:
+                    z_betrag = st.number_input("Betrag (€)", min_value=0.01, value=100.00, key=f"z_betrag_{case_id}")
+                    z_datum = st.date_input("Eingangsdatum", value=date.today(), key=f"z_datum_{case_id}")
+                with z_col2:
+                    z_art = st.selectbox("Zahlungsart", ["Überweisung", "Bar", "Scheck", "Ratenzahlung"], key=f"z_art_{case_id}")
+                    z_ref = st.text_input("Referenz/Verwendungszweck", key=f"z_ref_{case_id}")
+
+                col1, col2 = st.columns(2)
+                if col1.button("💾 Zahlung buchen", type="primary", key=f"z_create_{case_id}"):
+                    # Buchung hinzufügen
+                    new_booking = {
+                        'date': z_datum,
+                        'type': 'H',
+                        'amount': z_betrag,
+                        'cat': 'Zahlung',
+                        'desc': f'{z_art}: {z_ref}' if z_ref else z_art
+                    }
+                    if case_id not in DEMO_BOOKINGS:
+                        DEMO_BOOKINGS[case_id] = []
+                    DEMO_BOOKINGS[case_id].append(new_booking)
+                    st.success(f"✅ Zahlung über {fmt_curr(z_betrag)} verbucht!")
+                    st.session_state[f'show_zahlung_{case_id}'] = False
+                    st.rerun()
+                if col2.button("❌ Abbrechen", key=f"z_cancel_{case_id}"):
+                    st.session_state[f'show_zahlung_{case_id}'] = False
+                    st.rerun()
+
+        # RA-Gebühren Rechner Dialog
+        if st.session_state.get(f'show_ra_calc_{case_id}', False):
+            with st.expander("💶 RA-Gebühren berechnen (RVG)", expanded=True):
+                st.markdown("#### Rechtsanwaltsgebühren nach RVG")
+
+                ra_col1, ra_col2 = st.columns(2)
+                with ra_col1:
+                    streitwert = st.number_input(
+                        "Streitwert (€)",
+                        min_value=0.01,
+                        value=float(case['principal']),
+                        key=f"ra_sw_{case_id}"
+                    )
+                with ra_col2:
+                    gebuehrensatz = st.selectbox(
+                        "Gebührensatz",
+                        [
+                            ("0,5 - Einfache Schreiben", 0.5),
+                            ("1,0 - Verfahrensgebühr", 1.0),
+                            ("1,3 - Geschäftsgebühr", 1.3),
+                            ("1,5 - Erhöhte Gebühr", 1.5),
+                            ("2,0 - Terminsgebühr", 2.0),
+                        ],
+                        index=2,
+                        format_func=lambda x: x[0],
+                        key=f"ra_gs_{case_id}"
+                    )[1]
+
+                # Berechnung
+                ra_kosten = calculate_ra_kosten(streitwert, gebuehrensatz)
+
+                st.divider()
+                st.markdown("##### Berechnungsergebnis")
+
+                r_col1, r_col2 = st.columns(2)
+                with r_col1:
+                    st.write(f"**Streitwert:** {fmt_curr(ra_kosten['streitwert'])}")
+                    st.write(f"**Grundgebühr (RVG):** {fmt_curr(ra_kosten['grund_gebuehr'])}")
+                    st.write(f"**Gebührensatz:** {ra_kosten['gebuehrensatz']}")
+                with r_col2:
+                    st.write(f"**Geschäftsgebühr:** {fmt_curr(ra_kosten['geschaefts_gebuehr'])}")
+                    st.write(f"**Auslagenpauschale:** {fmt_curr(ra_kosten['auslagenpauschale'])}")
+                    st.write(f"**USt. (19%):** {fmt_curr(ra_kosten['ust'])}")
+
+                st.metric("**Gesamt (brutto)**", fmt_curr(ra_kosten['gesamt']))
+
+                col1, col2, col3 = st.columns(3)
+                if col1.button("💾 Als Buchung übernehmen", type="primary", key=f"ra_book_{case_id}"):
+                    new_booking = {
+                        'date': date.today(),
+                        'type': 'S',
+                        'amount': ra_kosten['gesamt'],
+                        'cat': 'RA-Gebühren',
+                        'desc': f'{ra_kosten["gebuehrensatz"]} Gebühr Nr. 2300 VV RVG'
+                    }
+                    if case_id not in DEMO_BOOKINGS:
+                        DEMO_BOOKINGS[case_id] = []
+                    DEMO_BOOKINGS[case_id].append(new_booking)
+                    st.success(f"✅ RA-Gebühren {fmt_curr(ra_kosten['gesamt'])} verbucht!")
+                    st.session_state[f'show_ra_calc_{case_id}'] = False
+                    st.rerun()
+                if col2.button("📋 Kopieren", key=f"ra_copy_{case_id}"):
+                    st.code(f"RA-Gebühren: {fmt_curr(ra_kosten['gesamt'])}")
+                if col3.button("❌ Schließen", key=f"ra_close_{case_id}"):
+                    st.session_state[f'show_ra_calc_{case_id}'] = False
+                    st.rerun()
 
     with tab2:
         st.markdown("### 💰 Forderungskonto")
