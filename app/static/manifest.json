@@ -1,6 +1,6 @@
 {
-    "name": "NotarFlow - Inkasso-Kommunikationsplattform",
-    "short_name": "NotarFlow",
+    "name": "InkassoKom - Inkasso-Kommunikationsplattform",
+    "short_name": "InkassoKom",
     "description": "Digitale Inkasso-Verwaltung für Rechtsanwälte, Gläubiger und Schuldner",
     "start_url": "/",
     "display": "standalone",

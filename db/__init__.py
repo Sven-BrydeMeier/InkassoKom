@@ -1,5 +1,5 @@
 """
-Database module for NotarFlow
+Database module for InkassoKom
 SQLite compatible for Streamlit Cloud
 """
 from sqlalchemy import create_engine

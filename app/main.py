@@ -1,5 +1,5 @@
 """
-NotarFlow - Inkasso-Kommunikationsplattform
+InkassoKom - Inkasso-Kommunikationsplattform
 Vollständige Implementierung aller Funktionen
 """
 import streamlit as st
@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 st.set_page_config(
-    page_title="NotarFlow - Inkasso-Plattform",
+    page_title="InkassoKom - Inkasso-Plattform",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -98,7 +98,7 @@ def logout():
 # LOGIN
 # =============================================================================
 def show_login():
-    st.markdown("# ⚖️ NotarFlow")
+    st.markdown("# ⚖️ InkassoKom")
     st.markdown("### Inkasso-Kommunikationsplattform")
     st.divider()
 
@@ -129,7 +129,7 @@ def show_login():
 # =============================================================================
 def lawyer_dashboard():
     with st.sidebar:
-        st.markdown(f"### ⚖️ NotarFlow")
+        st.markdown(f"### ⚖️ InkassoKom")
         st.caption(f"👨‍⚖️ {st.session_state.user['name']}")
         st.divider()
 
@@ -548,7 +548,7 @@ def show_limitation():
 # =============================================================================
 def creditor_dashboard():
     with st.sidebar:
-        st.markdown(f"### 💼 NotarFlow")
+        st.markdown(f"### 💼 InkassoKom")
         st.caption(f"💼 {st.session_state.user['name']}")
         st.divider()
         if st.button("📊 Übersicht", use_container_width=True):
@@ -664,7 +664,7 @@ def creditor_docs():
 # =============================================================================
 def debtor_dashboard():
     with st.sidebar:
-        st.markdown(f"### 👤 NotarFlow")
+        st.markdown(f"### 👤 InkassoKom")
         st.caption(f"👤 {st.session_state.user['name']}")
         st.divider()
         if st.button("📊 Übersicht", use_container_width=True):

@@ -1,4 +1,4 @@
-# NotarFlow - Inkasso-Kommunikationsplattform
+# InkassoKom - Inkasso-Kommunikationsplattform
 
 Eine mehrrollenfähige Streamlit-Anwendung für die digitale Inkasso-Verwaltung mit drei Benutzerrollen:
 - **Rechtsanwalt**: Vollständige Aktenverwaltung, Mahnverfahren, Zwangsvollstreckung
@@ -32,7 +32,7 @@ Eine mehrrollenfähige Streamlit-Anwendung für die digitale Inkasso-Verwaltung 
 ```bash
 # Repository klonen
 git clone <repository-url>
-cd NotarFlow
+cd InkassoKom
 
 # Virtual environment erstellen
 python -m venv venv
@@ -60,7 +60,7 @@ streamlit run app/main.py
 
 ```env
 # Datenbank
-DATABASE_URL=postgresql://user:pass@localhost:5432/notarflow
+DATABASE_URL=postgresql://user:pass@localhost:5432/inkassokom
 
 # Sicherheit
 SECRET_KEY=your-secret-key-min-32-chars
@@ -91,7 +91,7 @@ Nach Ausführung von `seed_data.py`:
 ## Projektstruktur
 
 ```
-NotarFlow/
+InkassoKom/
 ├── app/                    # Streamlit UI
 │   ├── main.py            # Haupteinstiegspunkt
 │   ├── pages/             # Seiten nach Rolle
@@ -153,4 +153,4 @@ Proprietär - Alle Rechte vorbehalten
 
 ## Support
 
-Bei Fragen oder Problemen: support@notarflow.de
+Bei Fragen oder Problemen: support@inkassokom.de

@@ -1,5 +1,5 @@
 """
-Database Models - NotarFlow Inkasso-Kommunikationsplattform
+Database Models - InkassoKom Inkasso-Kommunikationsplattform
 Minimal SQLite-compatible version
 """
 from datetime import datetime, date

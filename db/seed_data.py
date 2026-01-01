@@ -1,5 +1,5 @@
 """
-Seed Data Script for NotarFlow
+Seed Data Script for InkassoKom
 Creates demo organizations, users, cases, and sample data
 """
 from datetime import date, datetime, timedelta

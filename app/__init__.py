@@ -1,4 +1,4 @@
 """
-NotarFlow - Inkasso-Kommunikationsplattform
+InkassoKom - Inkasso-Kommunikationsplattform
 Streamlit Application
 """

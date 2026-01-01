@@ -1,5 +1,5 @@
 """
-Application Settings - NotarFlow Inkasso-Kommunikationsplattform
+Application Settings - InkassoKom Inkasso-Kommunikationsplattform
 """
 from pydantic_settings import BaseSettings
 from typing import Optional
@@ -10,13 +10,13 @@ class Settings(BaseSettings):
     """Application configuration using Pydantic Settings."""
 
     # Application
-    APP_NAME: str = "NotarFlow - Inkasso-Kommunikationsplattform"
+    APP_NAME: str = "InkassoKom - Inkasso-Kommunikationsplattform"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     SECRET_KEY: str = "change-this-in-production-32-chars-min"
 
     # Database - SQLite for Streamlit Cloud compatibility
-    DATABASE_URL: str = "sqlite:///./notarflow.db"
+    DATABASE_URL: str = "sqlite:///./inkassokom.db"
 
     # Storage
     STORAGE_TYPE: str = "local"
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
-    SMTP_FROM_EMAIL: str = "noreply@notarflow.de"
+    SMTP_FROM_EMAIL: str = "noreply@inkassokom.de"
 
     # Session
     SESSION_EXPIRY_HOURS: int = 24
