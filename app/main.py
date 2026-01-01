@@ -37,6 +37,14 @@ if 'page' not in st.session_state:
     st.session_state.page = 'dashboard'
 if 'selected_case' not in st.session_state:
     st.session_state.selected_case = None
+if 'imported_cases' not in st.session_state:
+    st.session_state.imported_cases = []
+if 'imported_documents' not in st.session_state:
+    st.session_state.imported_documents = {}
+if 'imported_bookings' not in st.session_state:
+    st.session_state.imported_bookings = {}
+if 'pdf_viewer_content' not in st.session_state:
+    st.session_state.pdf_viewer_content = None
 
 # =============================================================================
 # DEMO-DATEN
@@ -137,8 +145,14 @@ def show_document_viewer(doc, case_nr, key_prefix):
     with st.expander(f"📄 {doc['name']} ({doc['size']}) - {fmt_date(doc['date'])}"):
         c1, c2, c3 = st.columns(3)
 
-        # Demo-Inhalt generieren
-        pdf_content = generate_demo_pdf(doc['name'], case_nr)
+        # Prüfen ob echtes PDF in Session vorhanden
+        has_real_pdf = st.session_state.pdf_viewer_content is not None
+
+        # Demo-Inhalt oder echtes PDF
+        if has_real_pdf:
+            pdf_content = st.session_state.pdf_viewer_content
+        else:
+            pdf_content = generate_demo_pdf(doc['name'], case_nr)
 
         with c1:
             if st.button("👁️ Ansehen", key=f"{key_prefix}_view_{doc['id']}", use_container_width=True):
@@ -164,19 +178,399 @@ def show_document_viewer(doc, case_nr, key_prefix):
         if st.session_state.get(f"viewing_{doc['id']}", False):
             st.divider()
             st.markdown("### 📖 Dokumentvorschau")
-            st.text_area(
-                "Inhalt",
-                value=pdf_content.decode('utf-8'),
-                height=300,
-                disabled=True,
-                key=f"{key_prefix}_preview_{doc['id']}"
-            )
+
+            if has_real_pdf and doc['name'].endswith('.pdf'):
+                # Echter PDF-Viewer mit iframe
+                pdf_base64 = base64.b64encode(pdf_content).decode('utf-8')
+                pdf_display = f'''
+                <iframe
+                    src="data:application/pdf;base64,{pdf_base64}"
+                    width="100%"
+                    height="500px"
+                    type="application/pdf"
+                    style="border: 1px solid #ccc; border-radius: 5px;">
+                </iframe>
+                '''
+                st.markdown(pdf_display, unsafe_allow_html=True)
+            else:
+                # Text-Vorschau für Demo-PDFs
+                st.text_area(
+                    "Inhalt",
+                    value=pdf_content.decode('utf-8') if isinstance(pdf_content, bytes) else str(pdf_content),
+                    height=300,
+                    disabled=True,
+                    key=f"{key_prefix}_preview_{doc['id']}"
+                )
+
             if st.button("❌ Schließen", key=f"{key_prefix}_close_{doc['id']}"):
                 st.session_state[f"viewing_{doc['id']}"] = False
                 st.rerun()
 
         # Dokumentinfo
         st.caption(f"📁 Typ: {doc['type']} | 📅 Erstellt: {fmt_date(doc['date'])}")
+
+# =============================================================================
+# RA-MICRO IMPORT FUNKTIONEN
+# =============================================================================
+def parse_ra_micro_pdf(pdf_file):
+    """
+    Parst eine RA-Micro Gesamt-PDF und extrahiert:
+    - Aktenzeichen aus dem Inhaltsverzeichnis
+    - Einzelne Dokumente mit Seitenbereichen
+    - Forderungskonto mit Buchungen
+    """
+    try:
+        from PyPDF2 import PdfReader
+        import re
+
+        pdf_reader = PdfReader(pdf_file)
+        num_pages = len(pdf_reader.pages)
+
+        # Gesamten Text extrahieren
+        full_text = ""
+        page_texts = {}
+        for i, page in enumerate(pdf_reader.pages):
+            text = page.extract_text() or ""
+            full_text += text + "\n"
+            page_texts[i] = text
+
+        # Aktenzeichen extrahieren (Format: XX/YY oder XXXX/YY)
+        az_pattern = r'(?:Aktenzeichen|Az\.?|Akte)[:\s]*(\d{1,4}/\d{2,4})'
+        az_match = re.search(az_pattern, full_text, re.IGNORECASE)
+        aktenzeichen = az_match.group(1) if az_match else f"IMP/{datetime.now().strftime('%y')}"
+
+        # Parteien extrahieren
+        creditor_pattern = r'(?:Gläubiger|Mandant|Auftraggeber)[:\s]*([A-Za-zäöüÄÖÜß\s\-\.]+(?:GmbH|AG|e\.K\.|KG|OHG)?)'
+        debtor_pattern = r'(?:Schuldner|Gegner|Beklagter)[:\s]*([A-Za-zäöüÄÖÜß\s\-\.]+)'
+
+        creditor_match = re.search(creditor_pattern, full_text, re.IGNORECASE)
+        debtor_match = re.search(debtor_pattern, full_text, re.IGNORECASE)
+
+        creditor = creditor_match.group(1).strip() if creditor_match else "Unbekannter Gläubiger"
+        debtor = debtor_match.group(1).strip() if debtor_match else "Unbekannter Schuldner"
+
+        # Inhaltsverzeichnis parsen - Dokumente identifizieren
+        documents = []
+        toc_patterns = [
+            r'(\d+)\.\s+(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief|Forderungsaufstellung)[^\n]*(?:Seite\s*)?(\d+)?',
+            r'(Seite\s*)?(\d+)\s*[-–]\s*(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief)',
+        ]
+
+        doc_id_counter = 1
+        for pattern in toc_patterns:
+            for match in re.finditer(pattern, full_text, re.IGNORECASE):
+                groups = match.groups()
+                doc_type = None
+                page_num = 1
+
+                for g in groups:
+                    if g and g.lower() in ['rechnung', 'mahnung', 'mahnbescheid', 'vollstreckungsbescheid', 'vertrag', 'schreiben', 'brief', 'forderungsaufstellung']:
+                        doc_type = g.title()
+                    elif g and g.isdigit():
+                        page_num = int(g)
+
+                if doc_type:
+                    documents.append({
+                        'id': f'imp-doc-{doc_id_counter:03d}',
+                        'name': f'{doc_type}_{doc_id_counter}.pdf',
+                        'type': doc_type,
+                        'page': min(page_num, num_pages),
+                        'date': date.today() - timedelta(days=doc_id_counter * 10),
+                        'size': f'{(num_pages // len(documents) + 1) * 50} KB' if documents else '100 KB'
+                    })
+                    doc_id_counter += 1
+
+        # Fallback: Wenn keine Dokumente gefunden, Standarddokumente erstellen
+        if not documents:
+            documents = [
+                {'id': 'imp-doc-001', 'name': 'Forderungsaufstellung.pdf', 'type': 'Forderungsaufstellung', 'page': 1, 'date': date.today(), 'size': '150 KB'},
+                {'id': 'imp-doc-002', 'name': 'Originalrechnung.pdf', 'type': 'Rechnung', 'page': 2, 'date': date.today() - timedelta(30), 'size': '80 KB'},
+            ]
+
+        # Forderungskonto extrahieren
+        bookings = []
+
+        # Hauptforderung suchen
+        amount_patterns = [
+            r'(?:Hauptforderung|Forderung|Rechnungsbetrag|Kaufpreis)[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)',
+            r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)\s*(?:Hauptforderung|Forderung)',
+            r'Summe[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)',
+        ]
+
+        hauptforderung = 0.0
+        for pattern in amount_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                amount_str = match.group(1).replace('.', '').replace(',', '.')
+                try:
+                    hauptforderung = float(amount_str)
+                    break
+                except ValueError:
+                    continue
+
+        if hauptforderung == 0:
+            hauptforderung = 5000.00  # Demo-Fallback
+
+        bookings.append({
+            'date': date.today() - timedelta(60),
+            'type': 'S',
+            'amount': hauptforderung,
+            'cat': 'Hauptforderung',
+            'desc': 'Importiert aus RA-Micro'
+        })
+
+        # Zinsen suchen
+        zinsen_pattern = r'(?:Zinsen|Verzugszinsen)[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)'
+        zinsen_match = re.search(zinsen_pattern, full_text, re.IGNORECASE)
+        if zinsen_match:
+            zinsen_str = zinsen_match.group(1).replace('.', '').replace(',', '.')
+            try:
+                zinsen = float(zinsen_str)
+                bookings.append({
+                    'date': date.today() - timedelta(30),
+                    'type': 'S',
+                    'amount': zinsen,
+                    'cat': 'Zinsen',
+                    'desc': 'Verzugszinsen'
+                })
+            except ValueError:
+                pass
+
+        # RA-Gebühren suchen
+        gebuehren_pattern = r'(?:RA-Gebühren|Rechtsanwaltsgebühren|Anwaltskosten|Geschäftsgebühr)[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)'
+        gebuehren_match = re.search(gebuehren_pattern, full_text, re.IGNORECASE)
+        if gebuehren_match:
+            gebuehren_str = gebuehren_match.group(1).replace('.', '').replace(',', '.')
+            try:
+                gebuehren = float(gebuehren_str)
+                bookings.append({
+                    'date': date.today() - timedelta(45),
+                    'type': 'S',
+                    'amount': gebuehren,
+                    'cat': 'RA-Gebühren',
+                    'desc': '1,3 Geschäftsgebühr Nr. 2300 VV RVG'
+                })
+            except ValueError:
+                pass
+        else:
+            # Standard RA-Gebühren basierend auf Streitwert
+            ra_gebuehr = round(hauptforderung * 0.065, 2)  # Vereinfacht
+            bookings.append({
+                'date': date.today() - timedelta(45),
+                'type': 'S',
+                'amount': ra_gebuehr,
+                'cat': 'RA-Gebühren',
+                'desc': '1,3 Geschäftsgebühr Nr. 2300 VV RVG'
+            })
+
+        # Zahlungen suchen
+        zahlung_pattern = r'(?:Zahlung|Teilzahlung|Eingang)[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)'
+        for match in re.finditer(zahlung_pattern, full_text, re.IGNORECASE):
+            zahlung_str = match.group(1).replace('.', '').replace(',', '.')
+            try:
+                zahlung = float(zahlung_str)
+                if zahlung > 0 and zahlung < hauptforderung:
+                    bookings.append({
+                        'date': date.today() - timedelta(15),
+                        'type': 'H',
+                        'amount': zahlung,
+                        'cat': 'Zahlung',
+                        'desc': 'Teilzahlung'
+                    })
+                    break
+            except ValueError:
+                continue
+
+        # Status ermitteln
+        status = 'offen'
+        dunning = 'nicht_beantragt'
+        enforcement = 'nicht_begonnen'
+
+        if re.search(r'vollstreckungsbescheid|VB\s*erlassen', full_text, re.IGNORECASE):
+            status = 'vollstreckung'
+            dunning = 'titel_rechtskraeftig'
+            enforcement = 'gv_auftrag'
+        elif re.search(r'mahnbescheid|MB\s*beantragt', full_text, re.IGNORECASE):
+            status = 'mahnverfahren'
+            dunning = 'mb_zugestellt'
+
+        return {
+            'success': True,
+            'aktenzeichen': aktenzeichen,
+            'creditor': creditor[:50],
+            'debtor': debtor[:50],
+            'documents': documents,
+            'bookings': bookings,
+            'status': status,
+            'dunning': dunning,
+            'enforcement': enforcement,
+            'principal': hauptforderung,
+            'num_pages': num_pages,
+            'raw_text_preview': full_text[:500] + '...' if len(full_text) > 500 else full_text
+        }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+def show_ra_micro_import():
+    """RA-Micro Import Seite"""
+    st.markdown("## 📥 RA-Micro Aktenimport")
+    st.info("""
+    **So funktioniert der Import:**
+    1. Exportieren Sie die Akte in RA-Micro als Gesamt-PDF
+    2. Die PDF sollte das Inhaltsverzeichnis, alle Schreiben und das Forderungskonto enthalten
+    3. Laden Sie die PDF hier hoch
+    4. Das System extrahiert automatisch: Aktenzeichen, Dokumente, Forderungen
+    """)
+
+    st.divider()
+
+    # PDF Upload
+    uploaded_pdf = st.file_uploader(
+        "📄 RA-Micro Gesamt-PDF hochladen",
+        type=['pdf'],
+        help="Laden Sie die aus RA-Micro exportierte Gesamt-PDF hoch"
+    )
+
+    if uploaded_pdf:
+        st.success(f"✅ Datei geladen: {uploaded_pdf.name} ({uploaded_pdf.size / 1024:.1f} KB)")
+
+        # PDF in Session speichern für Viewer
+        pdf_bytes = uploaded_pdf.getvalue()
+        st.session_state.pdf_viewer_content = pdf_bytes
+
+        with st.spinner("🔄 PDF wird analysiert..."):
+            result = parse_ra_micro_pdf(io.BytesIO(pdf_bytes))
+
+        if result['success']:
+            st.markdown("### ✅ Analyse erfolgreich!")
+
+            # Vorschau der extrahierten Daten
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 📋 Akten-Informationen")
+                st.write(f"**Aktenzeichen:** {result['aktenzeichen']}")
+                st.write(f"**Gläubiger:** {result['creditor']}")
+                st.write(f"**Schuldner:** {result['debtor']}")
+                st.write(f"**Status:** {result['status'].title()}")
+                st.write(f"**Seiten:** {result['num_pages']}")
+
+            with col2:
+                st.markdown("#### 💰 Forderungskonto")
+                total_soll = sum(b['amount'] for b in result['bookings'] if b['type'] == 'S')
+                total_haben = sum(b['amount'] for b in result['bookings'] if b['type'] == 'H')
+                st.metric("Soll (Forderungen)", fmt_curr(total_soll))
+                st.metric("Haben (Zahlungen)", fmt_curr(total_haben))
+                st.metric("Offener Betrag", fmt_curr(total_soll - total_haben))
+
+            st.divider()
+
+            # Erkannte Dokumente
+            st.markdown("#### 📄 Erkannte Dokumente")
+            for doc in result['documents']:
+                c1, c2, c3 = st.columns([3, 2, 2])
+                c1.write(f"📄 {doc['name']}")
+                c2.write(doc['type'])
+                c3.write(f"Seite {doc['page']}")
+
+            st.divider()
+
+            # Buchungen
+            st.markdown("#### 📊 Erkannte Buchungen")
+            for b in result['bookings']:
+                c1, c2, c3, c4 = st.columns([2, 3, 2, 2])
+                c1.write(fmt_date(b['date']))
+                c2.write(b['desc'])
+                c3.write(b['cat'])
+                if b['type'] == 'S':
+                    c4.write(f"+{fmt_curr(b['amount'])}")
+                else:
+                    c4.markdown(f"**-{fmt_curr(b['amount'])}**")
+
+            st.divider()
+
+            # PDF Vorschau
+            with st.expander("👁️ PDF-Vorschau (Text)"):
+                st.text(result['raw_text_preview'])
+
+            # PDF-Viewer mit base64
+            with st.expander("📖 PDF-Dokument anzeigen"):
+                pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+                pdf_display = f'''
+                <iframe
+                    src="data:application/pdf;base64,{pdf_base64}"
+                    width="100%"
+                    height="600px"
+                    type="application/pdf"
+                    style="border: 1px solid #ccc; border-radius: 5px;">
+                </iframe>
+                '''
+                st.markdown(pdf_display, unsafe_allow_html=True)
+
+            st.divider()
+
+            # Import-Button
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("✅ Akte importieren", type="primary", use_container_width=True):
+                    # Neue Akte erstellen
+                    new_case_id = f"imp-{len(st.session_state.imported_cases) + 1:03d}"
+
+                    new_case = {
+                        'id': new_case_id,
+                        'nr': result['aktenzeichen'],
+                        'creditor': result['creditor'],
+                        'debtor': result['debtor'],
+                        'subject': f'Import aus RA-Micro - {uploaded_pdf.name}',
+                        'status': result['status'],
+                        'dunning': result['dunning'],
+                        'enforcement': result['enforcement'],
+                        'principal': result['principal'],
+                        'interest': 5.0,
+                        'due_date': date.today() - timedelta(days=60),
+                        'created': datetime.now(),
+                        'imported': True,
+                        'source_pdf': uploaded_pdf.name
+                    }
+
+                    # Zur Liste hinzufügen
+                    st.session_state.imported_cases.append(new_case)
+                    DEMO_CASES.append(new_case)
+
+                    # Dokumente hinzufügen
+                    for doc in result['documents']:
+                        doc['size'] = f"{len(pdf_bytes) // len(result['documents']) // 1024} KB"
+                    st.session_state.imported_documents[new_case_id] = result['documents']
+                    DEMO_DOCUMENTS[new_case_id] = result['documents']
+
+                    # Buchungen hinzufügen
+                    st.session_state.imported_bookings[new_case_id] = result['bookings']
+                    DEMO_BOOKINGS[new_case_id] = result['bookings']
+
+                    st.success(f"✅ Akte {result['aktenzeichen']} erfolgreich importiert!")
+                    st.balloons()
+
+                    # Zur Aktenübersicht wechseln
+                    st.session_state.page = 'cases'
+                    st.rerun()
+
+        else:
+            st.error(f"❌ Fehler beim Parsen: {result.get('error', 'Unbekannter Fehler')}")
+            st.warning("Bitte stellen Sie sicher, dass die PDF ein gültiges RA-Micro Export-Format hat.")
+
+    # Importierte Akten anzeigen
+    if st.session_state.imported_cases:
+        st.divider()
+        st.markdown("### 📁 Bereits importierte Akten")
+        for case in st.session_state.imported_cases:
+            with st.expander(f"📁 {case['nr']} - {case['debtor']}"):
+                st.write(f"**Gläubiger:** {case['creditor']}")
+                st.write(f"**Quelle:** {case.get('source_pdf', 'Unbekannt')}")
+                st.write(f"**Importiert:** {case['created'].strftime('%d.%m.%Y %H:%M')}")
 
 # =============================================================================
 # LOGIN
@@ -227,6 +621,9 @@ def lawyer_dashboard():
         if st.button("➕ Neue Akte", use_container_width=True):
             st.session_state.page = 'new_case'
             st.rerun()
+        if st.button("📥 RA-Micro Import", use_container_width=True):
+            st.session_state.page = 'ra_micro_import'
+            st.rerun()
         if st.button("📬 Posteingang", use_container_width=True):
             st.session_state.page = 'inbox'
             st.rerun()
@@ -250,6 +647,7 @@ def lawyer_dashboard():
     elif page == 'new_case': show_new_case()
     elif page == 'case_detail': show_case_detail()
     elif page == 'inbox': show_inbox()
+    elif page == 'ra_micro_import': show_ra_micro_import()
     elif page == 'dunning': show_dunning()
     elif page == 'enforcement': show_enforcement()
     elif page == 'limitation': show_limitation()
