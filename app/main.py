@@ -6,6 +6,8 @@ import streamlit as st
 from datetime import datetime, date, timedelta
 import sys
 import os
+import base64
+import io
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -41,20 +43,20 @@ if 'selected_case' not in st.session_state:
 # =============================================================================
 DEMO_CASES = [
     {
-        'id': 'case-001', 'nr': '1-25', 'creditor': 'Mustermann GmbH', 'debtor': 'Max Schmidt',
+        'id': 'case-001', 'nr': '1/25', 'creditor': 'Mustermann GmbH', 'debtor': 'Max Schmidt',
         'subject': 'Offene Rechnung 2024-001', 'status': 'offen', 'dunning': 'nicht_beantragt',
         'enforcement': 'nicht_begonnen', 'principal': 5000.00, 'interest': 5.0,
         'due_date': date.today() - timedelta(days=60), 'created': datetime.now() - timedelta(days=65),
     },
     {
-        'id': 'case-002', 'nr': '2-25', 'creditor': 'Mustermann GmbH', 'debtor': 'Hans Meier',
+        'id': 'case-002', 'nr': '2/25', 'creditor': 'Mustermann GmbH', 'debtor': 'Hans Meier',
         'subject': 'Kaufpreisforderung', 'status': 'mahnverfahren', 'dunning': 'mb_zugestellt',
         'enforcement': 'nicht_begonnen', 'principal': 2500.00, 'interest': 5.0,
         'due_date': date.today() - timedelta(days=90), 'created': datetime.now() - timedelta(days=95),
         'mb_date': date.today() - timedelta(days=30), 'mb_delivered': date.today() - timedelta(days=14),
     },
     {
-        'id': 'case-003', 'nr': '3-25', 'creditor': 'Mustermann GmbH', 'debtor': 'Anna Weber',
+        'id': 'case-003', 'nr': '3/25', 'creditor': 'Mustermann GmbH', 'debtor': 'Anna Weber',
         'subject': 'Mietrückstand', 'status': 'vollstreckung', 'dunning': 'titel_rechtskraeftig',
         'enforcement': 'pfueb_beantragt', 'principal': 3600.00, 'interest': 5.0,
         'due_date': date.today() - timedelta(days=180), 'created': datetime.now() - timedelta(days=185),
@@ -93,6 +95,88 @@ def logout():
     st.session_state.authenticated = False
     st.session_state.user = None
     st.session_state.page = 'dashboard'
+
+# =============================================================================
+# DEMO-DOKUMENTE
+# =============================================================================
+DEMO_DOCUMENTS = {
+    'case-001': [
+        {'id': 'doc-001', 'name': 'Forderungsaufstellung.pdf', 'date': date.today(), 'type': 'Forderungsaufstellung', 'size': '245 KB'},
+        {'id': 'doc-002', 'name': 'Rechnung_2024-001.pdf', 'date': date.today() - timedelta(60), 'type': 'Rechnung', 'size': '128 KB'},
+        {'id': 'doc-003', 'name': 'Mahnung_1.pdf', 'date': date.today() - timedelta(45), 'type': 'Mahnung', 'size': '98 KB'},
+    ],
+    'case-002': [
+        {'id': 'doc-004', 'name': 'Kaufvertrag.pdf', 'date': date.today() - timedelta(120), 'type': 'Vertrag', 'size': '512 KB'},
+        {'id': 'doc-005', 'name': 'Mahnbescheid.pdf', 'date': date.today() - timedelta(30), 'type': 'Mahnbescheid', 'size': '156 KB'},
+        {'id': 'doc-006', 'name': 'Zustellnachweis_MB.pdf', 'date': date.today() - timedelta(14), 'type': 'Zustellung', 'size': '89 KB'},
+    ],
+    'case-003': [
+        {'id': 'doc-007', 'name': 'Mietvertrag.pdf', 'date': date.today() - timedelta(365), 'type': 'Vertrag', 'size': '890 KB'},
+        {'id': 'doc-008', 'name': 'Vollstreckungsbescheid.pdf', 'date': date.today() - timedelta(60), 'type': 'VB', 'size': '178 KB'},
+        {'id': 'doc-009', 'name': 'PfueB_Antrag.pdf', 'date': date.today() - timedelta(7), 'type': 'PfüB', 'size': '234 KB'},
+    ],
+}
+
+def generate_demo_pdf(doc_name, case_nr):
+    """Generiert ein einfaches Demo-PDF"""
+    # Einfacher PDF-Inhalt (minimales gültiges PDF)
+    content = f"""Dokument: {doc_name}
+Akte: {case_nr}
+Datum: {fmt_date(date.today())}
+
+Dies ist ein Demo-Dokument der InkassoKom-Plattform.
+
+----------------------------------------
+Dieses Dokument dient nur zu Demonstrationszwecken.
+----------------------------------------
+"""
+    return content.encode('utf-8')
+
+def show_document_viewer(doc, case_nr, key_prefix):
+    """Zeigt Dokumentenoptionen: Ansehen, Herunterladen, Teilen"""
+    with st.expander(f"📄 {doc['name']} ({doc['size']}) - {fmt_date(doc['date'])}"):
+        c1, c2, c3 = st.columns(3)
+
+        # Demo-Inhalt generieren
+        pdf_content = generate_demo_pdf(doc['name'], case_nr)
+
+        with c1:
+            if st.button("👁️ Ansehen", key=f"{key_prefix}_view_{doc['id']}", use_container_width=True):
+                st.session_state[f"viewing_{doc['id']}"] = True
+
+        with c2:
+            st.download_button(
+                "⬇️ Download",
+                data=pdf_content,
+                file_name=doc['name'],
+                mime="application/pdf" if doc['name'].endswith('.pdf') else "application/octet-stream",
+                key=f"{key_prefix}_dl_{doc['id']}",
+                use_container_width=True
+            )
+
+        with c3:
+            share_url = f"https://inkassokom.de/dok/{doc['id']}"
+            if st.button("🔗 Teilen", key=f"{key_prefix}_share_{doc['id']}", use_container_width=True):
+                st.code(share_url, language=None)
+                st.info("Link in Zwischenablage kopiert!")
+
+        # PDF-Vorschau anzeigen
+        if st.session_state.get(f"viewing_{doc['id']}", False):
+            st.divider()
+            st.markdown("### 📖 Dokumentvorschau")
+            st.text_area(
+                "Inhalt",
+                value=pdf_content.decode('utf-8'),
+                height=300,
+                disabled=True,
+                key=f"{key_prefix}_preview_{doc['id']}"
+            )
+            if st.button("❌ Schließen", key=f"{key_prefix}_close_{doc['id']}"):
+                st.session_state[f"viewing_{doc['id']}"] = False
+                st.rerun()
+
+        # Dokumentinfo
+        st.caption(f"📁 Typ: {doc['type']} | 📅 Erstellt: {fmt_date(doc['date'])}")
 
 # =============================================================================
 # LOGIN
@@ -211,8 +295,8 @@ def show_lawyer_overview():
         st.divider()
 
     st.markdown("### ⚠️ Warnungen")
-    st.warning("**Verjährung:** Akte 1-25 - Prüfung empfohlen")
-    st.info("**Widerspruchsfrist:** Akte 2-25 - läuft in 7 Tagen ab")
+    st.warning("**Verjährung:** Akte 1/25 - Prüfung empfohlen")
+    st.info("**Widerspruchsfrist:** Akte 2/25 - läuft in 7 Tagen ab")
 
 def show_cases_list():
     st.markdown("## 📁 Aktenübersicht")
@@ -374,18 +458,14 @@ def show_case_detail():
 
     with tab3:
         st.markdown("### 📄 Dokumente")
-        docs = [
-            ("Rechnung_2024.pdf", "Rechnung", date.today() - timedelta(60)),
-            ("Mahnung_1.pdf", "Mahnung", date.today() - timedelta(45)),
-        ]
-        for name, typ, d in docs:
-            c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
-            c1.write(f"📄 {name}")
-            c2.write(typ)
-            c3.write(fmt_date(d))
-            c4.button("⬇️", key=f"d_{name}")
-            st.divider()
+        docs = DEMO_DOCUMENTS.get(case_id, [])
+        if docs:
+            for doc in docs:
+                show_document_viewer(doc, case['nr'], f"ra_{case_id}")
+        else:
+            st.info("Keine Dokumente vorhanden")
 
+        st.divider()
         uploaded = st.file_uploader("Dokument hochladen", type=['pdf', 'docx', 'jpg'])
         if uploaded:
             if st.button("📤 Hochladen", type="primary"):
@@ -646,18 +726,24 @@ def creditor_payment():
 def creditor_docs():
     st.markdown("## 📄 Dokumente")
 
-    docs = [
-        ("1-25", "Forderungsaufstellung.pdf", date.today()),
-        ("1-25", "Mahnbescheid.pdf", date.today() - timedelta(14)),
-        ("2-25", "Rechnung.pdf", date.today() - timedelta(90)),
-    ]
-    for case, name, d in docs:
-        c1, c2, c3, c4 = st.columns([1.5, 3, 2, 1])
-        c1.write(f"📁 {case}")
-        c2.write(f"📄 {name}")
-        c3.write(fmt_date(d))
-        c4.button("⬇️", key=f"cd_{name}")
-        st.divider()
+    # Filter für Akten
+    case_filter = st.selectbox(
+        "Akte filtern",
+        ["Alle Akten"] + [c['nr'] for c in DEMO_CASES],
+        key="cred_doc_filter"
+    )
+
+    # Dokumente nach Akte gruppieren
+    for case in DEMO_CASES:
+        if case_filter != "Alle Akten" and case['nr'] != case_filter:
+            continue
+
+        docs = DEMO_DOCUMENTS.get(case['id'], [])
+        if docs:
+            st.markdown(f"### 📁 Akte {case['nr']} - {case['debtor']}")
+            for doc in docs:
+                show_document_viewer(doc, case['nr'], f"cred_{case['id']}")
+            st.divider()
 
 # =============================================================================
 # SCHULDNER DASHBOARD
@@ -782,18 +868,17 @@ def debtor_installment():
 
 def debtor_docs():
     st.markdown("## 📄 Dokumente")
+    st.info("Hier finden Sie alle Dokumente zu Ihrer Forderung. Sie können diese ansehen, herunterladen oder teilen.")
 
-    docs = [
-        ("Forderungsaufstellung.pdf", date.today()),
-        ("Mahnbescheid.pdf", date.today() - timedelta(14)),
-        ("Rechnung.pdf", date.today() - timedelta(60)),
-    ]
-    for name, d in docs:
-        c1, c2, c3 = st.columns([4, 2, 1])
-        c1.write(f"📄 {name}")
-        c2.write(fmt_date(d))
-        c3.button("⬇️", key=f"dd_{name}")
-        st.divider()
+    # Demo: Dokumente für case-001 (Schuldner-Sicht)
+    case = DEMO_CASES[0]
+    docs = DEMO_DOCUMENTS.get(case['id'], [])
+
+    if docs:
+        for doc in docs:
+            show_document_viewer(doc, case['nr'], "debtor")
+    else:
+        st.info("Keine Dokumente vorhanden")
 
 def debtor_contact():
     st.markdown("## 💬 Kontakt")
