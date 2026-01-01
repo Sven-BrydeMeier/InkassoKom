@@ -1157,10 +1157,22 @@ def show_case_detail():
         st.divider()
         c1, c2, c3 = st.columns(3)
         if case['dunning'] == 'nicht_beantragt':
-            c1.button("📤 Mahnbescheid beantragen", type="primary", use_container_width=True)
+            if c1.button("📤 Mahnbescheid beantragen", type="primary", use_container_width=True, key=f"tab_mb_{case_id}"):
+                st.session_state[f'show_mb_{case_id}'] = True
+                st.rerun()
         if case['dunning'] == 'mb_zugestellt':
-            c2.button("📤 VB beantragen", type="primary", use_container_width=True)
-        c3.button("📋 EDA-Datei erstellen", use_container_width=True)
+            if c2.button("📤 VB beantragen", type="primary", use_container_width=True, key=f"tab_vb_{case_id}"):
+                st.success("✅ Vollstreckungsbescheid wird beantragt...")
+        if c3.button("📋 EDA-Datei erstellen", use_container_width=True, key=f"tab_eda_{case_id}"):
+            st.info("📋 EDA-Datei wird generiert...")
+            st.code(f"""EDA-DATENSATZ
+Aktenzeichen: {case['nr']}
+Schuldner: {case['debtor']}
+Gläubiger: {case['creditor']}
+Hauptforderung: {fmt_curr(case['principal'])}
+Status: {case['dunning']}
+---
+Format: EDA 4.0 (Mahnbescheid)""", language=None)
 
     with tab5:
         st.markdown("### 📜 Verlauf")
@@ -1181,6 +1193,10 @@ def show_inbox():
     st.markdown("## 📬 Posteingang")
     st.info("Eingehende Dokumente zur Zuordnung")
 
+    # Session state für Zuordnungs-Dialog
+    if 'inbox_assign' not in st.session_state:
+        st.session_state.inbox_assign = None
+
     items = [
         ("Brief_2024-12-30.pdf", datetime.now() - timedelta(hours=2), "neu"),
         ("Email_Anlage.pdf", datetime.now() - timedelta(days=1), "zugeordnet"),
@@ -1190,8 +1206,25 @@ def show_inbox():
         c1.write(f"📄 {name}")
         c2.write(dt.strftime("%d.%m.%Y %H:%M"))
         c3.write("🔴 Neu" if status == "neu" else "✅ Zugeordnet")
-        c4.button("Zuordnen", key=f"i_{name}")
+        if c4.button("Zuordnen", key=f"i_{name}"):
+            st.session_state.inbox_assign = name
         st.divider()
+
+    # Zuordnungs-Dialog
+    if st.session_state.inbox_assign:
+        with st.expander(f"📁 Dokument zuordnen: {st.session_state.inbox_assign}", expanded=True):
+            case_options = [f"{c['nr']} - {c['debtor']}" for c in DEMO_CASES]
+            selected_case = st.selectbox("Akte auswählen", case_options, key="inbox_case_select")
+            doc_type = st.selectbox("Dokumenttyp", ["Schreiben", "Rechnung", "Mahnung", "Sonstiges"], key="inbox_doc_type")
+
+            col1, col2 = st.columns(2)
+            if col1.button("✅ Zuordnen", type="primary", key="inbox_confirm"):
+                st.success(f"✅ '{st.session_state.inbox_assign}' wurde {selected_case} zugeordnet!")
+                st.session_state.inbox_assign = None
+                st.rerun()
+            if col2.button("❌ Abbrechen", key="inbox_cancel"):
+                st.session_state.inbox_assign = None
+                st.rerun()
 
 def show_dunning():
     st.markdown("## ⚖️ Mahnverfahren")
@@ -1247,10 +1280,82 @@ def show_enforcement():
         st.divider()
 
     st.markdown("### ⚡ Aktionen")
+
+    # Session state für Dialoge
+    if 'show_gv' not in st.session_state:
+        st.session_state.show_gv = False
+    if 'show_pfueb' not in st.session_state:
+        st.session_state.show_pfueb = False
+    if 'show_vv' not in st.session_state:
+        st.session_state.show_vv = False
+
     c1, c2, c3 = st.columns(3)
-    c1.button("👮 GV-Auftrag", use_container_width=True)
-    c2.button("📋 PfÜB beantragen", use_container_width=True)
-    c3.button("📊 VV-Analyse", use_container_width=True)
+    if c1.button("👮 GV-Auftrag", use_container_width=True):
+        st.session_state.show_gv = True
+    if c2.button("📋 PfÜB beantragen", use_container_width=True):
+        st.session_state.show_pfueb = True
+    if c3.button("📊 VV-Analyse", use_container_width=True):
+        st.session_state.show_vv = True
+
+    # GV-Auftrag Dialog
+    if st.session_state.show_gv:
+        with st.expander("👮 Gerichtsvollzieher-Auftrag erstellen", expanded=True):
+            gv_case = st.selectbox("Akte", [f"{c['nr']} - {c['debtor']}" for c in enf_cases], key="gv_case")
+            gv_type = st.selectbox("Auftragsart", [
+                "Mobiliarvollstreckung",
+                "Abnahme Vermögensauskunft",
+                "Haftbefehl beantragen",
+                "Taschenpfändung"
+            ], key="gv_type")
+            gv_notes = st.text_area("Hinweise für GV", placeholder="Besonderheiten...", key="gv_notes")
+
+            col1, col2 = st.columns(2)
+            if col1.button("📤 Auftrag erstellen", type="primary", key="gv_create"):
+                st.success(f"✅ GV-Auftrag ({gv_type}) für {gv_case} erstellt!")
+                st.session_state.show_gv = False
+                st.rerun()
+            if col2.button("❌ Abbrechen", key="gv_cancel"):
+                st.session_state.show_gv = False
+                st.rerun()
+
+    # PfÜB Dialog
+    if st.session_state.show_pfueb:
+        with st.expander("📋 Pfändungs- und Überweisungsbeschluss", expanded=True):
+            pf_case = st.selectbox("Akte", [f"{c['nr']} - {c['debtor']}" for c in enf_cases], key="pf_case")
+            pf_drittschuldner = st.text_input("Drittschuldner (z.B. Arbeitgeber, Bank)", key="pf_ds")
+            pf_type = st.selectbox("Pfändungsart", [
+                "Arbeitseinkommen",
+                "Bankkonto (P-Konto)",
+                "Sonstige Forderungen"
+            ], key="pf_type")
+
+            col1, col2 = st.columns(2)
+            if col1.button("📤 PfÜB beantragen", type="primary", key="pf_create"):
+                st.success(f"✅ PfÜB gegen {pf_drittschuldner} für {pf_case} beantragt!")
+                st.session_state.show_pfueb = False
+                st.rerun()
+            if col2.button("❌ Abbrechen", key="pf_cancel"):
+                st.session_state.show_pfueb = False
+                st.rerun()
+
+    # VV-Analyse Dialog
+    if st.session_state.show_vv:
+        with st.expander("📊 Vermögensverzeichnis-Analyse", expanded=True):
+            st.info("Analyse des Vermögensverzeichnisses zur Identifikation von Vollstreckungsmöglichkeiten")
+            vv_case = st.selectbox("Akte", [f"{c['nr']} - {c['debtor']}" for c in enf_cases], key="vv_case")
+
+            st.markdown("#### Erkannte Vermögenswerte (Demo)")
+            st.write("💼 **Arbeitgeber:** Musterfirma GmbH, Musterstr. 1, 10115 Berlin")
+            st.write("🏦 **Bankverbindung:** Sparkasse Berlin, IBAN: DE89...")
+            st.write("🚗 **Fahrzeug:** VW Golf, Bj. 2019 (Finanziert)")
+            st.write("🏠 **Immobilie:** Keine")
+
+            st.markdown("#### Empfehlung")
+            st.success("✅ Lohnpfändung empfohlen (Arbeitseinkommen vorhanden)")
+
+            if st.button("❌ Schließen", key="vv_close"):
+                st.session_state.show_vv = False
+                st.rerun()
 
 def show_limitation():
     st.markdown("## ⏰ Verjährung")
