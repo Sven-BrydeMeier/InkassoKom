@@ -45,6 +45,17 @@ if 'imported_bookings' not in st.session_state:
     st.session_state.imported_bookings = {}
 if 'pdf_viewer_content' not in st.session_state:
     st.session_state.pdf_viewer_content = None
+# AI & Kommunikation
+if 'openai_api_key' not in st.session_state:
+    st.session_state.openai_api_key = ""
+if 'messages' not in st.session_state:
+    st.session_state.messages = []  # Globale Nachrichtenliste
+if 'notifications' not in st.session_state:
+    st.session_state.notifications = []
+if 'browser_notifications' not in st.session_state:
+    st.session_state.browser_notifications = False
+if 'case_events' not in st.session_state:
+    st.session_state.case_events = []  # Ereignisprotokoll
 
 # =============================================================================
 # DEMO-DATEN
@@ -169,6 +180,206 @@ def logout():
     st.session_state.authenticated = False
     st.session_state.user = None
     st.session_state.page = 'dashboard'
+
+# =============================================================================
+# DEMO-NACHRICHTEN & EREIGNISSE
+# =============================================================================
+DEMO_MESSAGES = [
+    {
+        'id': 'msg-001',
+        'from_role': 'glaeubigerin',
+        'from_name': 'Erika Mustermann',
+        'to_role': 'rechtsanwalt',
+        'to_name': 'Thomas Müller',
+        'case_id': 'case-001',
+        'subject': 'Anfrage zum Sachstand',
+        'content': 'Sehr geehrter Herr Müller,\n\nkönnen Sie mir bitte den aktuellen Sachstand zur Akte 1/25 mitteilen?\n\nMit freundlichen Grüßen\nErika Mustermann',
+        'date': datetime.now() - timedelta(hours=2),
+        'read': False,
+        'type': 'inquiry'
+    },
+    {
+        'id': 'msg-002',
+        'from_role': 'schuldner',
+        'from_name': 'Max Schmidt',
+        'to_role': 'rechtsanwalt',
+        'to_name': 'Thomas Müller',
+        'case_id': 'case-001',
+        'subject': 'Bitte um Ratenzahlung',
+        'content': 'Sehr geehrte Damen und Herren,\n\nich kann die Forderung leider nicht auf einmal begleichen. Wäre eine Ratenzahlung möglich?\n\nMit freundlichen Grüßen\nMax Schmidt',
+        'date': datetime.now() - timedelta(days=1),
+        'read': True,
+        'type': 'request'
+    },
+]
+
+DEMO_EVENTS = [
+    {'case_id': 'case-001', 'date': datetime.now() - timedelta(days=30), 'type': 'zahlung', 'desc': 'Teilzahlung 1.000€ eingegangen', 'notified': True},
+    {'case_id': 'case-002', 'date': datetime.now() - timedelta(days=14), 'type': 'mahnbescheid', 'desc': 'Mahnbescheid zugestellt', 'notified': True},
+    {'case_id': 'case-003', 'date': datetime.now() - timedelta(days=7), 'type': 'pfueb', 'desc': 'PfÜB beantragt', 'notified': False},
+]
+
+# =============================================================================
+# KI-KOMMUNIKATIONSASSISTENT
+# =============================================================================
+def generate_ai_response(case, inquiry_type='sachstand'):
+    """
+    Generiert eine KI-gestützte Antwort basierend auf Akten- und Anfrage-Daten.
+    Wenn OpenAI API Key vorhanden, nutze echte KI, sonst Template.
+    """
+    s, h, o = get_balance(case['id'])
+
+    # Status-Beschreibungen
+    status_texts = {
+        'offen': 'Die Forderung ist offen und befindet sich in der außergerichtlichen Beitreibung.',
+        'mahnverfahren': 'Es wurde ein gerichtliches Mahnverfahren eingeleitet.',
+        'vollstreckung': 'Die Forderung befindet sich in der Zwangsvollstreckung.',
+        'abgeschlossen': 'Das Verfahren wurde abgeschlossen.'
+    }
+
+    dunning_texts = {
+        'nicht_beantragt': 'Ein Mahnbescheid wurde noch nicht beantragt.',
+        'mb_beantragt': 'Der Mahnbescheid wurde beantragt und ist in Bearbeitung.',
+        'mb_zugestellt': 'Der Mahnbescheid wurde dem Schuldner zugestellt. Die Widerspruchsfrist läuft.',
+        'vb_beantragt': 'Der Vollstreckungsbescheid wurde beantragt.',
+        'vb_erlassen': 'Der Vollstreckungsbescheid wurde erlassen.',
+        'titel_rechtskraeftig': 'Der Titel ist rechtskräftig. Vollstreckungsmaßnahmen können eingeleitet werden.'
+    }
+
+    next_steps = {
+        'offen': 'Als nächsten Schritt empfehlen wir die Beantragung eines Mahnbescheids.',
+        'mahnverfahren': 'Wir warten die Widerspruchsfrist ab bzw. beantragen den Vollstreckungsbescheid.',
+        'vollstreckung': 'Die Zwangsvollstreckung wird fortgesetzt.',
+        'abgeschlossen': 'Keine weiteren Schritte erforderlich.'
+    }
+
+    # Prüfen ob OpenAI API verfügbar
+    if st.session_state.openai_api_key:
+        try:
+            import openai
+            client = openai.OpenAI(api_key=st.session_state.openai_api_key)
+
+            prompt = f"""Du bist ein Rechtsanwalt für Inkasso. Erstelle eine professionelle Antwort auf eine Sachstandsanfrage.
+
+Aktenzeichen: {case['nr']}
+Schuldner: {case['debtor']}
+Gläubiger: {case['creditor']}
+Hauptforderung: {case['principal']:.2f} €
+Offener Betrag: {o:.2f} €
+Bezahlt: {h:.2f} €
+Status: {case['status']}
+Mahnverfahren: {case['dunning']}
+Fällig seit: {case['due_date'].strftime('%d.%m.%Y')}
+
+Erstelle ein formelles Schreiben mit aktuellem Sachstand und nächsten Schritten."""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            pass  # Fallback auf Template
+
+    # Template-basierte Antwort (ohne API)
+    today = date.today().strftime('%d.%m.%Y')
+    template = f"""Sehr geehrte Damen und Herren,
+
+bezugnehmend auf Ihre Anfrage zum Sachstand teilen wir Ihnen Folgendes mit:
+
+**Aktenzeichen:** {case['nr']}
+**Schuldner:** {case['debtor']}
+**Gläubiger:** {case['creditor']}
+
+**Aktueller Sachstand:**
+{status_texts.get(case['status'], 'Status unbekannt')}
+{dunning_texts.get(case['dunning'], '')}
+
+**Forderungsübersicht:**
+- Hauptforderung: {fmt_curr(case['principal'])}
+- Gesamtforderung (inkl. Zinsen/Kosten): {fmt_curr(s)}
+- Bereits gezahlt: {fmt_curr(h)}
+- **Offener Betrag: {fmt_curr(o)}**
+
+**Nächste Schritte:**
+{next_steps.get(case['status'], '')}
+
+Für Rückfragen stehen wir Ihnen gerne zur Verfügung.
+
+Mit freundlichen Grüßen
+Ihre Kanzlei
+
+---
+Stand: {today}"""
+
+    return template
+
+def send_message(from_role, from_name, to_role, to_name, case_id, subject, content, doc_ids=None):
+    """Sendet eine Nachricht und erstellt Benachrichtigungen"""
+    msg = {
+        'id': f'msg-{len(st.session_state.messages) + 100:03d}',
+        'from_role': from_role,
+        'from_name': from_name,
+        'to_role': to_role,
+        'to_name': to_name,
+        'case_id': case_id,
+        'subject': subject,
+        'content': content,
+        'date': datetime.now(),
+        'read': False,
+        'type': 'message',
+        'attachments': doc_ids or []
+    }
+    st.session_state.messages.append(msg)
+
+    # Benachrichtigung erstellen
+    notification = {
+        'id': f'notif-{len(st.session_state.notifications) + 1:03d}',
+        'user_role': to_role,
+        'type': 'message',
+        'title': f'Neue Nachricht: {subject}',
+        'content': f'Von {from_name} zu Akte {case_id}',
+        'date': datetime.now(),
+        'read': False,
+        'link': 'inbox'
+    }
+    st.session_state.notifications.append(notification)
+    return msg
+
+def add_case_event(case_id, event_type, description):
+    """Fügt ein Ereignis hinzu und benachrichtigt Gläubiger"""
+    event = {
+        'case_id': case_id,
+        'date': datetime.now(),
+        'type': event_type,
+        'desc': description,
+        'notified': False
+    }
+    st.session_state.case_events.append(event)
+
+    # Benachrichtigung für Gläubiger
+    case = next((c for c in DEMO_CASES if c['id'] == case_id), None)
+    if case:
+        notification = {
+            'id': f'notif-{len(st.session_state.notifications) + 1:03d}',
+            'user_role': 'glaeubigerin',
+            'type': 'event',
+            'title': f'Aktenfortschritt: {case["nr"]}',
+            'content': description,
+            'date': datetime.now(),
+            'read': False,
+            'link': 'claims'
+        }
+        st.session_state.notifications.append(notification)
+
+def get_unread_count(role):
+    """Zählt ungelesene Nachrichten für eine Rolle"""
+    return sum(1 for m in st.session_state.messages + DEMO_MESSAGES if m['to_role'] == role and not m['read'])
+
+def get_notification_count(role):
+    """Zählt ungelesene Benachrichtigungen für eine Rolle"""
+    return sum(1 for n in st.session_state.notifications if n['user_role'] == role and not n['read'])
 
 # =============================================================================
 # DEMO-DOKUMENTE
@@ -672,9 +883,18 @@ def show_login():
 # RECHTSANWALT DASHBOARD
 # =============================================================================
 def lawyer_dashboard():
+    # Ungelesene Nachrichten zählen
+    unread = get_unread_count('rechtsanwalt')
+    notif_count = get_notification_count('rechtsanwalt')
+
     with st.sidebar:
         st.markdown(f"### ⚖️ InkassoKom")
         st.caption(f"👨‍⚖️ {st.session_state.user['name']}")
+
+        # Benachrichtigungsanzeige
+        if unread > 0 or notif_count > 0:
+            st.warning(f"📬 {unread} neue Nachrichten | 🔔 {notif_count} Benachrichtigungen")
+
         st.divider()
 
         if st.button("📊 Dashboard", use_container_width=True):
@@ -690,9 +910,17 @@ def lawyer_dashboard():
         if st.button("📥 RA-Micro Import", use_container_width=True):
             st.session_state.page = 'ra_micro_import'
             st.rerun()
-        if st.button("📬 Posteingang", use_container_width=True):
-            st.session_state.page = 'inbox'
+
+        # Posteingang mit Unread-Badge
+        inbox_label = f"📬 Posteingang ({unread})" if unread > 0 else "📬 Posteingang"
+        if st.button(inbox_label, use_container_width=True):
+            st.session_state.page = 'messages'
             st.rerun()
+
+        if st.button("✉️ Nachricht senden", use_container_width=True):
+            st.session_state.page = 'compose'
+            st.rerun()
+
         st.divider()
         if st.button("⚖️ Mahnverfahren", use_container_width=True):
             st.session_state.page = 'dunning'
@@ -704,6 +932,11 @@ def lawyer_dashboard():
             st.session_state.page = 'limitation'
             st.rerun()
         st.divider()
+
+        # Einstellungen
+        if st.button("⚙️ Einstellungen", use_container_width=True):
+            st.session_state.page = 'settings'
+            st.rerun()
         if st.button("🚪 Abmelden", use_container_width=True):
             logout()
             st.rerun()
@@ -713,6 +946,9 @@ def lawyer_dashboard():
     elif page == 'new_case': show_new_case()
     elif page == 'case_detail': show_case_detail()
     elif page == 'inbox': show_inbox()
+    elif page == 'messages': show_lawyer_messages()
+    elif page == 'compose': show_compose_message()
+    elif page == 'settings': show_settings()
     elif page == 'ra_micro_import': show_ra_micro_import()
     elif page == 'dunning': show_dunning()
     elif page == 'enforcement': show_enforcement()
@@ -1226,6 +1462,288 @@ def show_inbox():
                 st.session_state.inbox_assign = None
                 st.rerun()
 
+# =============================================================================
+# NACHRICHTEN & KI-KOMMUNIKATION
+# =============================================================================
+def show_lawyer_messages():
+    """Posteingang für Anwalt mit KI-Unterstützung"""
+    st.markdown("## 📬 Posteingang")
+
+    # Tabs für Nachrichten
+    tab1, tab2, tab3 = st.tabs(["📥 Eingang", "📤 Gesendet", "🔔 Benachrichtigungen"])
+
+    with tab1:
+        # Alle Nachrichten an Anwalt
+        all_messages = [m for m in st.session_state.messages + DEMO_MESSAGES if m['to_role'] == 'rechtsanwalt']
+        all_messages.sort(key=lambda x: x['date'], reverse=True)
+
+        if not all_messages:
+            st.info("Keine Nachrichten vorhanden")
+        else:
+            for msg in all_messages:
+                case = next((c for c in DEMO_CASES if c['id'] == msg.get('case_id')), None)
+                case_nr = case['nr'] if case else 'Unbekannt'
+
+                status_icon = "🔴" if not msg['read'] else "✅"
+                with st.expander(f"{status_icon} **{msg['subject']}** - Von: {msg['from_name']} (Akte {case_nr}) - {msg['date'].strftime('%d.%m.%Y %H:%M')}"):
+                    st.write(msg['content'])
+
+                    st.divider()
+                    st.markdown("### 🤖 KI-Antwort generieren")
+
+                    if case:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            response_type = st.selectbox(
+                                "Antworttyp",
+                                ["Sachstandsmitteilung", "Zahlungsaufforderung", "Ratenzahlungsangebot", "Allgemeine Antwort"],
+                                key=f"resp_type_{msg['id']}"
+                            )
+
+                        if st.button("🤖 Antwort generieren", key=f"gen_{msg['id']}", type="primary"):
+                            with st.spinner("KI generiert Antwort..."):
+                                response = generate_ai_response(case, response_type)
+                                st.session_state[f"draft_{msg['id']}"] = response
+
+                        # Draft anzeigen/bearbeiten
+                        if f"draft_{msg['id']}" in st.session_state:
+                            draft = st.text_area(
+                                "Antwort (bearbeiten)",
+                                value=st.session_state[f"draft_{msg['id']}"],
+                                height=300,
+                                key=f"edit_{msg['id']}"
+                            )
+
+                            st.markdown("### 📤 Versandoptionen")
+                            col1, col2, col3, col4 = st.columns(4)
+
+                            with col1:
+                                if st.button("📬 In Postfach legen", key=f"inbox_{msg['id']}", use_container_width=True):
+                                    send_message(
+                                        'rechtsanwalt', st.session_state.user['name'],
+                                        msg['from_role'], msg['from_name'],
+                                        msg.get('case_id', ''), f"Re: {msg['subject']}", draft
+                                    )
+                                    add_case_event(msg.get('case_id', ''), 'kommunikation', f"Antwort an {msg['from_name']} gesendet")
+                                    st.success("✅ Nachricht in Postfach gelegt!")
+                                    st.rerun()
+
+                            with col2:
+                                st.download_button(
+                                    "📄 Als Word",
+                                    data=draft.encode('utf-8'),
+                                    file_name=f"Antwort_{case_nr}_{date.today().strftime('%Y%m%d')}.txt",
+                                    mime="text/plain",
+                                    key=f"word_{msg['id']}",
+                                    use_container_width=True
+                                )
+
+                            with col3:
+                                if st.button("📧 Per E-Mail", key=f"email_{msg['id']}", use_container_width=True):
+                                    st.info("E-Mail-Versand würde hier erfolgen (Demo)")
+
+                            with col4:
+                                if st.button("📁 Zur Akte", key=f"tocase_{msg['id']}", use_container_width=True):
+                                    st.success("✅ Dokument zur Akte hinzugefügt!")
+                    else:
+                        st.warning("Keine Akte zugeordnet - KI-Antwort nicht möglich")
+
+    with tab2:
+        # Gesendete Nachrichten
+        sent = [m for m in st.session_state.messages if m.get('from_role') == 'rechtsanwalt']
+        sent.sort(key=lambda x: x['date'], reverse=True)
+
+        if not sent:
+            st.info("Keine gesendeten Nachrichten")
+        else:
+            for msg in sent:
+                with st.expander(f"📤 **{msg['subject']}** - An: {msg['to_name']} - {msg['date'].strftime('%d.%m.%Y %H:%M')}"):
+                    st.write(msg['content'])
+
+    with tab3:
+        # Benachrichtigungen
+        notifs = [n for n in st.session_state.notifications if n['user_role'] == 'rechtsanwalt']
+        notifs.sort(key=lambda x: x['date'], reverse=True)
+
+        if not notifs:
+            st.info("Keine Benachrichtigungen")
+        else:
+            for notif in notifs:
+                icon = "🔔" if not notif['read'] else "✓"
+                st.write(f"{icon} **{notif['title']}** - {notif['content']} ({notif['date'].strftime('%d.%m.%Y %H:%M')})")
+                st.divider()
+
+def show_compose_message():
+    """Nachricht verfassen"""
+    st.markdown("## ✉️ Nachricht verfassen")
+
+    # Empfänger auswählen
+    recipient_type = st.radio("Empfänger", ["Gläubigerin", "Schuldner"], horizontal=True)
+
+    # Akte auswählen
+    case_options = ["Ohne Aktenbezug"] + [f"{c['nr']} - {c['debtor']}" for c in DEMO_CASES]
+    selected_case = st.selectbox("Akte", case_options)
+
+    case = None
+    if selected_case != "Ohne Aktenbezug":
+        case_nr = selected_case.split(" - ")[0]
+        case = next((c for c in DEMO_CASES if c['nr'] == case_nr), None)
+
+    subject = st.text_input("Betreff")
+
+    # KI-Unterstützung
+    if case:
+        st.markdown("### 🤖 KI-Unterstützung")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("📊 Sachstand generieren", use_container_width=True):
+                st.session_state.compose_draft = generate_ai_response(case, 'sachstand')
+        with col2:
+            if st.button("💰 Zahlungsaufforderung", use_container_width=True):
+                s, h, o = get_balance(case['id'])
+                st.session_state.compose_draft = f"""Sehr geehrte Damen und Herren,
+
+wir erlauben uns, Sie an die offene Forderung in Höhe von {fmt_curr(o)} zu erinnern.
+
+Bitte überweisen Sie den Betrag innerhalb von 14 Tagen auf unser Kanzleikonto.
+
+Mit freundlichen Grüßen"""
+        with col3:
+            if st.button("📅 Ratenzahlung anbieten", use_container_width=True):
+                s, h, o = get_balance(case['id'])
+                monthly = round(o / 6, 2)
+                st.session_state.compose_draft = f"""Sehr geehrte Damen und Herren,
+
+wir bieten Ihnen die Möglichkeit einer Ratenzahlung an.
+
+Offener Betrag: {fmt_curr(o)}
+Vorgeschlagene Monatsrate: {fmt_curr(monthly)}
+Laufzeit: 6 Monate
+
+Bei Interesse melden Sie sich bitte.
+
+Mit freundlichen Grüßen"""
+
+    # Nachrichtentext
+    content = st.text_area(
+        "Nachricht",
+        value=st.session_state.get('compose_draft', ''),
+        height=300
+    )
+
+    # Dokumente anhängen
+    attach_docs = st.checkbox("Dokumente anhängen")
+    selected_docs = []
+    if attach_docs and case:
+        docs = DEMO_DOCUMENTS.get(case['id'], [])
+        for doc in docs:
+            if st.checkbox(f"📄 {doc['name']}", key=f"attach_{doc['id']}"):
+                selected_docs.append(doc['id'])
+
+    st.divider()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📬 In Postfach senden", type="primary", use_container_width=True):
+            if subject and content:
+                to_role = 'glaeubigerin' if recipient_type == "Gläubigerin" else 'schuldner'
+                to_name = case['creditor'] if to_role == 'glaeubigerin' else case['debtor'] if case else "Empfänger"
+
+                send_message(
+                    'rechtsanwalt', st.session_state.user['name'],
+                    to_role, to_name,
+                    case['id'] if case else '', subject, content, selected_docs
+                )
+
+                if case:
+                    add_case_event(case['id'], 'kommunikation', f"Nachricht an {to_name} gesendet: {subject}")
+
+                st.success("✅ Nachricht gesendet!")
+                st.session_state.compose_draft = ''
+                st.rerun()
+            else:
+                st.error("Bitte Betreff und Nachricht eingeben")
+
+    with col2:
+        st.download_button(
+            "📄 Als Dokument speichern",
+            data=content.encode('utf-8'),
+            file_name=f"Schreiben_{date.today().strftime('%Y%m%d')}.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+    with col3:
+        if st.button("❌ Abbrechen", use_container_width=True):
+            st.session_state.compose_draft = ''
+            st.session_state.page = 'dashboard'
+            st.rerun()
+
+def show_settings():
+    """Einstellungen für API-Keys und Benachrichtigungen"""
+    st.markdown("## ⚙️ Einstellungen")
+
+    tab1, tab2, tab3 = st.tabs(["🤖 KI-Integration", "🔔 Benachrichtigungen", "👤 Profil"])
+
+    with tab1:
+        st.markdown("### OpenAI API-Schlüssel")
+        st.info("""
+        Für die KI-gestützte Kommunikation benötigen Sie einen OpenAI API-Schlüssel.
+        Diesen erhalten Sie unter: https://platform.openai.com/api-keys
+        """)
+
+        api_key = st.text_input(
+            "API-Schlüssel",
+            value=st.session_state.openai_api_key,
+            type="password",
+            placeholder="sk-..."
+        )
+
+        if st.button("💾 API-Schlüssel speichern", type="primary"):
+            st.session_state.openai_api_key = api_key
+            if api_key:
+                st.success("✅ API-Schlüssel gespeichert!")
+            else:
+                st.info("API-Schlüssel entfernt. KI nutzt jetzt Template-basierte Antworten.")
+
+        st.divider()
+        st.markdown("### KI-Status")
+        if st.session_state.openai_api_key:
+            st.success("✅ KI-Integration aktiv (OpenAI GPT-4)")
+        else:
+            st.warning("⚠️ Keine API - Template-basierte Antworten werden verwendet")
+
+    with tab2:
+        st.markdown("### Browser-Benachrichtigungen")
+        browser_notif = st.checkbox(
+            "Browser-Benachrichtigungen aktivieren",
+            value=st.session_state.browser_notifications
+        )
+        if browser_notif != st.session_state.browser_notifications:
+            st.session_state.browser_notifications = browser_notif
+            st.success("Einstellung gespeichert!")
+
+        st.markdown("### E-Mail-Benachrichtigungen")
+        email_notif = st.checkbox("E-Mail bei neuen Nachrichten", value=True)
+        event_notif = st.checkbox("E-Mail bei Aktenfortschritt", value=True)
+
+        st.markdown("### Benachrichtigungstypen")
+        st.checkbox("Neue Nachrichten von Gläubigern", value=True)
+        st.checkbox("Neue Nachrichten von Schuldnern", value=True)
+        st.checkbox("Zahlungseingänge", value=True)
+        st.checkbox("Mahnverfahren-Updates", value=True)
+        st.checkbox("Fristen-Warnungen", value=True)
+
+    with tab3:
+        st.markdown("### Profil")
+        st.text_input("Name", value=st.session_state.user['name'], disabled=True)
+        st.text_input("E-Mail", value="ra.mueller@kanzlei.de")
+        st.text_input("Telefon", value="+49 30 123456")
+
+        st.markdown("### Kanzlei")
+        st.text_input("Kanzleiname", value="Kanzlei Müller & Partner")
+        st.text_area("Adresse", value="Musterstraße 123\n10115 Berlin")
+
 def show_dunning():
     st.markdown("## ⚖️ Mahnverfahren")
 
@@ -1387,9 +1905,18 @@ def show_limitation():
 # GLÄUBIGER DASHBOARD
 # =============================================================================
 def creditor_dashboard():
+    # Ungelesene Nachrichten zählen
+    unread = get_unread_count('glaeubigerin')
+    notif_count = get_notification_count('glaeubigerin')
+
     with st.sidebar:
         st.markdown(f"### 💼 InkassoKom")
         st.caption(f"💼 {st.session_state.user['name']}")
+
+        # Benachrichtigungsanzeige
+        if unread > 0 or notif_count > 0:
+            st.warning(f"📬 {unread} neue Nachrichten | 🔔 {notif_count} Benachrichtigungen")
+
         st.divider()
         if st.button("📊 Übersicht", use_container_width=True):
             st.session_state.page = 'dashboard'
@@ -1397,6 +1924,17 @@ def creditor_dashboard():
         if st.button("💰 Forderungen", use_container_width=True):
             st.session_state.page = 'claims'
             st.rerun()
+
+        # Posteingang mit Unread-Badge
+        inbox_label = f"📬 Posteingang ({unread})" if unread > 0 else "📬 Posteingang"
+        if st.button(inbox_label, use_container_width=True):
+            st.session_state.page = 'messages'
+            st.rerun()
+
+        if st.button("✉️ Nachricht an Anwalt", use_container_width=True):
+            st.session_state.page = 'compose'
+            st.rerun()
+
         if st.button("💳 Zahlung melden", use_container_width=True):
             st.session_state.page = 'payment'
             st.rerun()
@@ -1410,6 +1948,8 @@ def creditor_dashboard():
 
     page = st.session_state.page
     if page == 'claims': creditor_claims()
+    elif page == 'messages': show_creditor_messages()
+    elif page == 'compose': show_creditor_compose()
     elif page == 'payment': creditor_payment()
     elif page == 'docs': creditor_docs()
     else: creditor_overview()
@@ -1505,13 +2045,195 @@ def creditor_docs():
                 show_document_viewer(doc, case['nr'], f"cred_{case['id']}")
             st.divider()
 
+def show_creditor_messages():
+    """Posteingang für Gläubiger mit Ereignis-Benachrichtigungen"""
+    st.markdown("## 📬 Posteingang")
+
+    tab1, tab2, tab3 = st.tabs(["📥 Nachrichten", "🔔 Aktenfortschritt", "📤 Gesendet"])
+
+    with tab1:
+        # Alle Nachrichten an Gläubiger
+        all_messages = [m for m in st.session_state.messages + DEMO_MESSAGES if m['to_role'] == 'glaeubigerin']
+        all_messages.sort(key=lambda x: x['date'], reverse=True)
+
+        if not all_messages:
+            st.info("Keine Nachrichten vorhanden")
+        else:
+            for msg in all_messages:
+                case = next((c for c in DEMO_CASES if c['id'] == msg.get('case_id')), None)
+                case_nr = case['nr'] if case else 'Allgemein'
+
+                status_icon = "🔴" if not msg['read'] else "✅"
+                with st.expander(f"{status_icon} **{msg['subject']}** - Von: {msg['from_name']} (Akte {case_nr}) - {msg['date'].strftime('%d.%m.%Y %H:%M')}"):
+                    st.write(msg['content'])
+
+                    # Anhänge anzeigen
+                    if msg.get('attachments'):
+                        st.markdown("### 📎 Anhänge")
+                        for att_id in msg['attachments']:
+                            st.write(f"📄 Dokument {att_id}")
+
+                    st.divider()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("💬 Antworten", key=f"cred_reply_{msg['id']}"):
+                            st.session_state.cred_reply_to = msg
+                            st.session_state.page = 'compose'
+                            st.rerun()
+                    with col2:
+                        if st.button("✓ Als gelesen markieren", key=f"cred_read_{msg['id']}"):
+                            msg['read'] = True
+                            st.success("Als gelesen markiert")
+                            st.rerun()
+
+    with tab2:
+        # Aktenfortschritt / Ereignisse für Gläubiger
+        st.markdown("### 📋 Aktuelle Ereignisse zu Ihren Forderungen")
+
+        all_events = st.session_state.case_events + DEMO_EVENTS
+        all_events.sort(key=lambda x: x['date'], reverse=True)
+
+        if not all_events:
+            st.info("Keine Ereignisse vorhanden")
+        else:
+            for event in all_events:
+                case = next((c for c in DEMO_CASES if c['id'] == event['case_id']), None)
+                if case:
+                    icon = "🔔" if not event.get('notified') else "✓"
+                    event_icons = {
+                        'zahlung': '💰',
+                        'mahnbescheid': '⚖️',
+                        'vb': '📋',
+                        'pfueb': '📋',
+                        'kommunikation': '💬',
+                    }
+                    e_icon = event_icons.get(event['type'], '📌')
+
+                    st.markdown(f"{icon} {e_icon} **{case['nr']} - {case['debtor']}**")
+                    st.write(event['desc'])
+                    st.caption(event['date'].strftime('%d.%m.%Y %H:%M') if isinstance(event['date'], datetime) else str(event['date']))
+                    st.divider()
+
+    with tab3:
+        # Gesendete Nachrichten
+        sent = [m for m in st.session_state.messages if m.get('from_role') == 'glaeubigerin']
+        sent.sort(key=lambda x: x['date'], reverse=True)
+
+        if not sent:
+            st.info("Keine gesendeten Nachrichten")
+        else:
+            for msg in sent:
+                with st.expander(f"📤 **{msg['subject']}** - {msg['date'].strftime('%d.%m.%Y %H:%M')}"):
+                    st.write(msg['content'])
+
+def show_creditor_compose():
+    """Nachricht an Anwalt verfassen (Gläubiger-Sicht)"""
+    st.markdown("## ✉️ Nachricht an Anwalt")
+
+    # Prüfen ob Antwort auf bestehende Nachricht
+    reply_to = st.session_state.get('cred_reply_to')
+    if reply_to:
+        st.info(f"Antwort auf: {reply_to['subject']}")
+        default_subject = f"Re: {reply_to['subject']}"
+        default_case_id = reply_to.get('case_id', '')
+    else:
+        default_subject = ""
+        default_case_id = ""
+
+    # Akte auswählen
+    case_options = [f"{c['nr']} - {c['debtor']}" for c in DEMO_CASES]
+    if default_case_id:
+        case = next((c for c in DEMO_CASES if c['id'] == default_case_id), None)
+        default_idx = case_options.index(f"{case['nr']} - {case['debtor']}") if case else 0
+    else:
+        default_idx = 0
+
+    selected_case = st.selectbox("Zu Akte", case_options, index=default_idx)
+    case_nr = selected_case.split(" - ")[0]
+    case = next((c for c in DEMO_CASES if c['nr'] == case_nr), None)
+
+    subject = st.text_input("Betreff", value=default_subject)
+
+    # Vorlagen für häufige Anfragen
+    st.markdown("### 📝 Schnellauswahl")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📊 Sachstand anfragen", use_container_width=True):
+            st.session_state.cred_compose_draft = f"""Sehr geehrte Damen und Herren,
+
+ich bitte um Mitteilung des aktuellen Sachstands zur Akte {case['nr']} gegen {case['debtor']}.
+
+Mit freundlichen Grüßen
+{st.session_state.user['name']}"""
+    with col2:
+        if st.button("💰 Zahlung melden", use_container_width=True):
+            st.session_state.cred_compose_draft = f"""Sehr geehrte Damen und Herren,
+
+ich möchte mitteilen, dass ich eine Zahlung erhalten habe:
+
+Akte: {case['nr']}
+Schuldner: {case['debtor']}
+Betrag: [Bitte eintragen]
+Datum: {date.today().strftime('%d.%m.%Y')}
+
+Mit freundlichen Grüßen
+{st.session_state.user['name']}"""
+    with col3:
+        if st.button("❓ Allgemeine Frage", use_container_width=True):
+            st.session_state.cred_compose_draft = f"""Sehr geehrte Damen und Herren,
+
+ich habe eine Frage zu Akte {case['nr']}:
+
+[Ihre Frage hier]
+
+Mit freundlichen Grüßen
+{st.session_state.user['name']}"""
+
+    content = st.text_area(
+        "Nachricht",
+        value=st.session_state.get('cred_compose_draft', ''),
+        height=300
+    )
+
+    st.divider()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📤 Nachricht senden", type="primary", use_container_width=True):
+            if subject and content:
+                send_message(
+                    'glaeubigerin', st.session_state.user['name'],
+                    'rechtsanwalt', 'Thomas Müller',
+                    case['id'] if case else '', subject, content
+                )
+                st.success("✅ Nachricht gesendet!")
+                st.session_state.cred_compose_draft = ''
+                st.session_state.cred_reply_to = None
+                st.rerun()
+            else:
+                st.error("Bitte Betreff und Nachricht eingeben")
+    with col2:
+        if st.button("❌ Abbrechen", use_container_width=True):
+            st.session_state.cred_compose_draft = ''
+            st.session_state.cred_reply_to = None
+            st.session_state.page = 'dashboard'
+            st.rerun()
+
 # =============================================================================
 # SCHULDNER DASHBOARD
 # =============================================================================
 def debtor_dashboard():
+    # Ungelesene Nachrichten zählen
+    unread = get_unread_count('schuldner')
+    notif_count = get_notification_count('schuldner')
+
     with st.sidebar:
         st.markdown(f"### 👤 InkassoKom")
         st.caption(f"👤 {st.session_state.user['name']}")
+
+        # Benachrichtigungsanzeige
+        if unread > 0 or notif_count > 0:
+            st.warning(f"📬 {unread} neue Nachrichten")
+
         st.divider()
         if st.button("📊 Übersicht", use_container_width=True):
             st.session_state.page = 'dashboard'
@@ -1519,13 +2241,20 @@ def debtor_dashboard():
         if st.button("💰 Schulden", use_container_width=True):
             st.session_state.page = 'debts'
             st.rerun()
+
+        # Posteingang mit Unread-Badge
+        inbox_label = f"📬 Posteingang ({unread})" if unread > 0 else "📬 Posteingang"
+        if st.button(inbox_label, use_container_width=True):
+            st.session_state.page = 'messages'
+            st.rerun()
+
         if st.button("📅 Ratenzahlung", use_container_width=True):
             st.session_state.page = 'installment'
             st.rerun()
         if st.button("📄 Dokumente", use_container_width=True):
             st.session_state.page = 'docs'
             st.rerun()
-        if st.button("💬 Kontakt", use_container_width=True):
+        if st.button("💬 Kontakt/Nachricht", use_container_width=True):
             st.session_state.page = 'contact'
             st.rerun()
         st.divider()
@@ -1535,6 +2264,7 @@ def debtor_dashboard():
 
     page = st.session_state.page
     if page == 'debts': debtor_debts()
+    elif page == 'messages': show_debtor_messages()
     elif page == 'installment': debtor_installment()
     elif page == 'docs': debtor_docs()
     elif page == 'contact': debtor_contact()
@@ -1640,8 +2370,65 @@ def debtor_docs():
     else:
         st.info("Keine Dokumente vorhanden")
 
+def show_debtor_messages():
+    """Posteingang für Schuldner"""
+    st.markdown("## 📬 Posteingang")
+
+    tab1, tab2 = st.tabs(["📥 Nachrichten", "📤 Gesendet"])
+
+    with tab1:
+        # Alle Nachrichten an Schuldner
+        all_messages = [m for m in st.session_state.messages + DEMO_MESSAGES if m['to_role'] == 'schuldner']
+        all_messages.sort(key=lambda x: x['date'], reverse=True)
+
+        if not all_messages:
+            st.info("Keine Nachrichten vorhanden")
+        else:
+            for msg in all_messages:
+                case = next((c for c in DEMO_CASES if c['id'] == msg.get('case_id')), None)
+                case_nr = case['nr'] if case else 'Allgemein'
+
+                status_icon = "🔴" if not msg['read'] else "✅"
+                with st.expander(f"{status_icon} **{msg['subject']}** - Von: Kanzlei (Akte {case_nr}) - {msg['date'].strftime('%d.%m.%Y %H:%M')}"):
+                    st.write(msg['content'])
+
+                    # Anhänge anzeigen
+                    if msg.get('attachments'):
+                        st.markdown("### 📎 Anhänge")
+                        for att_id in msg['attachments']:
+                            # Dokument suchen und anzeigen
+                            for c_id, docs in DEMO_DOCUMENTS.items():
+                                for doc in docs:
+                                    if doc['id'] == att_id:
+                                        show_document_viewer(doc, case_nr, f"debt_att_{msg['id']}")
+
+                    st.divider()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("💬 Antworten", key=f"debt_reply_{msg['id']}"):
+                            st.session_state.debt_reply_to = msg
+                            st.session_state.page = 'contact'
+                            st.rerun()
+                    with col2:
+                        if st.button("✓ Als gelesen markieren", key=f"debt_read_{msg['id']}"):
+                            msg['read'] = True
+                            st.success("Als gelesen markiert")
+                            st.rerun()
+
+    with tab2:
+        # Gesendete Nachrichten
+        sent = [m for m in st.session_state.messages if m.get('from_role') == 'schuldner']
+        sent.sort(key=lambda x: x['date'], reverse=True)
+
+        if not sent:
+            st.info("Keine gesendeten Nachrichten")
+        else:
+            for msg in sent:
+                with st.expander(f"📤 **{msg['subject']}** - {msg['date'].strftime('%d.%m.%Y %H:%M')}"):
+                    st.write(msg['content'])
+
 def debtor_contact():
-    st.markdown("## 💬 Kontakt")
+    st.markdown("## 💬 Kontakt & Nachricht")
 
     st.info("""
     **Kanzlei Müller & Partner**
@@ -1651,15 +2438,96 @@ def debtor_contact():
     """)
 
     st.divider()
-    with st.form("contact"):
-        subject = st.selectbox("Betreff", ["Frage zur Forderung", "Zahlungsvereinbarung", "Adressänderung", "Widerspruch", "Sonstiges"])
-        message = st.text_area("Nachricht", height=150)
 
-        if st.form_submit_button("📤 Senden", type="primary", use_container_width=True):
+    # Prüfen ob Antwort auf bestehende Nachricht
+    reply_to = st.session_state.get('debt_reply_to')
+    if reply_to:
+        st.info(f"Antwort auf: {reply_to['subject']}")
+        default_subject = f"Re: {reply_to['subject']}"
+    else:
+        default_subject = ""
+
+    # Demo: erster Fall gehört dem Schuldner
+    case = DEMO_CASES[0]
+
+    st.markdown("### ✉️ Nachricht an die Kanzlei")
+
+    # Schnellvorlagen
+    st.markdown("**Schnellauswahl:**")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📅 Ratenzahlung anfragen", use_container_width=True, key="debt_tpl_rate"):
+            s, h, o = get_balance(case['id'])
+            st.session_state.debt_compose_draft = f"""Sehr geehrte Damen und Herren,
+
+ich möchte eine Ratenzahlung für die Forderung vereinbaren.
+
+Akte: {case['nr']}
+Offener Betrag: {fmt_curr(o)}
+Gewünschte monatliche Rate: [Bitte angeben]
+
+Meine finanzielle Situation erlaubt derzeit keine Einmalzahlung.
+
+Mit freundlichen Grüßen
+{st.session_state.user['name']}"""
+    with col2:
+        if st.button("❓ Frage zur Forderung", use_container_width=True, key="debt_tpl_frage"):
+            st.session_state.debt_compose_draft = f"""Sehr geehrte Damen und Herren,
+
+ich habe eine Frage zu meiner Forderung:
+
+[Ihre Frage hier]
+
+Mit freundlichen Grüßen
+{st.session_state.user['name']}"""
+    with col3:
+        if st.button("🏠 Adressänderung", use_container_width=True, key="debt_tpl_addr"):
+            st.session_state.debt_compose_draft = f"""Sehr geehrte Damen und Herren,
+
+hiermit teile ich Ihnen meine neue Adresse mit:
+
+Alte Adresse: [Bitte angeben]
+Neue Adresse: [Bitte angeben]
+
+Mit freundlichen Grüßen
+{st.session_state.user['name']}"""
+
+    st.divider()
+
+    subject_options = ["Frage zur Forderung", "Zahlungsvereinbarung", "Ratenzahlungsantrag", "Adressänderung", "Widerspruch", "Sonstiges"]
+    if reply_to:
+        subject = st.text_input("Betreff", value=default_subject)
+    else:
+        subject = st.selectbox("Betreff", subject_options)
+
+    message = st.text_area(
+        "Nachricht",
+        value=st.session_state.get('debt_compose_draft', ''),
+        height=200
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📤 Nachricht senden", type="primary", use_container_width=True):
             if message:
-                st.success("✅ Nachricht gesendet!")
+                # Nachricht über das System senden
+                send_message(
+                    'schuldner', st.session_state.user['name'],
+                    'rechtsanwalt', 'Thomas Müller',
+                    case['id'], subject, message
+                )
+                st.success("✅ Nachricht gesendet! Sie erhalten eine Antwort in Ihrem Posteingang.")
+                st.session_state.debt_compose_draft = ''
+                st.session_state.debt_reply_to = None
+                st.balloons()
             else:
                 st.error("Bitte Nachricht eingeben.")
+    with col2:
+        if reply_to:
+            if st.button("❌ Abbrechen", use_container_width=True):
+                st.session_state.debt_reply_to = None
+                st.session_state.debt_compose_draft = ''
+                st.rerun()
 
 # =============================================================================
 # MAIN
