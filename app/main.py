@@ -2,6 +2,10 @@
 InkassoKom - Inkasso-Kommunikationsplattform
 Vollständige Implementierung aller Funktionen
 """
+
+# App-Versionsnummer (Datum-Zeit Format)
+APP_VERSION = "v2025.01.02-1430"
+
 import streamlit as st
 from datetime import datetime, date, timedelta
 import sys
@@ -1283,6 +1287,7 @@ def show_ra_micro_import():
 def show_login():
     st.markdown("# ⚖️ InkassoKom")
     st.markdown("### Inkasso-Kommunikationsplattform")
+    st.caption(f"Version: {APP_VERSION}")
     st.divider()
 
     col1, col2, col3 = st.columns([1, 2, 1])
