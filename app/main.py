@@ -518,7 +518,8 @@ def add_case_event(case_id, event_type, description):
     st.session_state.case_events.append(event)
 
     # Benachrichtigung für Gläubiger
-    case = next((c for c in DEMO_CASES if c['id'] == case_id), None)
+    all_cases = get_all_cases()
+    case = next((c for c in all_cases if c['id'] == case_id), None)
     if case:
         notification = {
             'id': f'notif-{len(st.session_state.notifications) + 1:03d}',
@@ -895,68 +896,110 @@ def parse_ra_micro_pdf(pdf_file):
         # Mandant = Gläubiger (unser Auftraggeber)
         # Gegner = Schuldner (die beklagte Partei)
 
-        # Verschiedene Muster für Mandant/Gläubiger
-        creditor_patterns = [
-            # Aktenvorblatt-Format: "Mandant: Name" oder "Mandant\nName"
-            r'(?:Mandant(?:in)?|Mandantschaft)[:\s\n]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?)(?:\n|$|Gegner|Schuldner|Aktenzeichen)',
-            # Standard: "Gläubiger: Name GmbH"
-            r'(?:Gläubiger(?:in)?|Auftraggeber(?:in)?)[:\s]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?(?:GmbH|AG|e\.K\.|KG|OHG|UG|mbH)?)',
-            # Format mit "wegen ... gegen"
-            r'(?:namens|in Vollmacht|für)[^\n]*?(?:der|des|die)\s+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.]+?(?:GmbH|AG|e\.K\.|KG|OHG|UG|mbH)?)',
-        ]
-
-        # Verschiedene Muster für Gegner/Schuldner
-        debtor_patterns = [
-            # Aktenvorblatt-Format: "Gegner: Name" oder "Gegner\nName"
-            r'(?:Gegner(?:in)?|Antragsgegner(?:in)?)[:\s\n]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?)(?:\n|$|Mandant|Gläubiger|Aktenzeichen|geboren)',
-            # Standard: "Schuldner: Max Mustermann"
-            r'(?:Schuldner(?:in)?|Beklagte[r]?)[:\s]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?)(?:\n|$|geboren|wohnhaft)',
-            # Format: "gegen [Name]"
-            r'(?:\sgegen\s)([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.]+?)(?:\n|,|$|wegen|geboren)',
-        ]
-
         creditor = "Unbekannter Gläubiger"
         debtor = "Unbekannter Schuldner"
         creditor_address = ""
         debtor_address = ""
 
-        # Gläubiger/Mandant finden
-        for pattern in creditor_patterns:
-            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                creditor = match.group(1).strip()
-                # Bereinigen
-                creditor = re.sub(r'\s+', ' ', creditor)  # Mehrfache Leerzeichen entfernen
-                creditor = creditor.rstrip(',.-')  # Trailing punctuation entfernen
-                if len(creditor) > 3 and creditor != "Unbekannter Gläubiger":
-                    break
+        # Normalisiere den Text für bessere Erkennung
+        # Ersetze mehrfache Leerzeichen/Zeilenumbrüche
+        normalized_text = re.sub(r'[ \t]+', ' ', full_text)
 
-        # Schuldner/Gegner finden
-        for pattern in debtor_patterns:
-            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                debtor = match.group(1).strip()
-                # Bereinigen
-                debtor = re.sub(r'\s+', ' ', debtor)  # Mehrfache Leerzeichen entfernen
-                debtor = debtor.rstrip(',.-')  # Trailing punctuation entfernen
-                if len(debtor) > 3 and debtor != "Unbekannter Schuldner":
-                    break
+        # === MANDANT / GLÄUBIGER ERKENNUNG ===
+        # Suche nach verschiedenen Formaten
 
-        # Adressen extrahieren
-        address_pattern = r'(?:wohnhaft|Anschrift|Adresse|PLZ)[:\s]*([A-Za-zäöüÄÖÜß\s\-\.0-9,]+?\d{5}\s+[A-Za-zäöüÄÖÜß\-]+)'
-
-        # Versuche Schuldneradresse zu finden (erscheint oft nach Schuldnername)
-        debtor_addr_match = re.search(
-            rf'{re.escape(debtor[:20])}[^\n]*\n([A-Za-zäöüÄÖÜß\s\-\.0-9]+?\d{{5}}\s+[A-Za-zäöüÄÖÜß\-]+)',
+        # Format 1: "Mandant:" oder "Mandant :" gefolgt von Namen (kann auf gleicher oder nächster Zeile sein)
+        mandant_match = re.search(
+            r'Mandant(?:in|schaft)?[\s:]*\n?\s*([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.&]+?)(?:\n|Gegner|Schuldner|Aktenzeichen|Geb|geb|\d{5}|$)',
             full_text, re.IGNORECASE
         )
-        if debtor_addr_match:
-            debtor_address = debtor_addr_match.group(1).strip()
-        else:
-            # Fallback: Allgemeine Adresssuche
-            addr_matches = re.findall(r'([A-Za-zäöüÄÖÜß\-\.]+(?:straße|str\.|weg|platz|allee)\s*\d+[a-z]?\s*\n?\s*\d{5}\s+[A-Za-zäöüÄÖÜß\-]+)', full_text, re.IGNORECASE)
-            if addr_matches:
-                debtor_address = addr_matches[-1] if len(addr_matches) > 0 else ""  # Letzte Adresse oft Schuldner
+        if mandant_match:
+            creditor = mandant_match.group(1).strip()
+
+        # Format 2: "Gläubiger:" Format
+        if creditor == "Unbekannter Gläubiger":
+            glaub_match = re.search(
+                r'Gläubiger(?:in)?[\s:]+([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.&]+?)(?:\n|Schuldner|$)',
+                full_text, re.IGNORECASE
+            )
+            if glaub_match:
+                creditor = glaub_match.group(1).strip()
+
+        # Format 3: "Auftraggeber:" Format
+        if creditor == "Unbekannter Gläubiger":
+            auftrag_match = re.search(
+                r'Auftraggeber(?:in)?[\s:]+([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.&]+?)(?:\n|$)',
+                full_text, re.IGNORECASE
+            )
+            if auftrag_match:
+                creditor = auftrag_match.group(1).strip()
+
+        # === GEGNER / SCHULDNER ERKENNUNG ===
+
+        # Format 1: "Gegner:" gefolgt von Namen (kann auf gleicher oder nächster Zeile sein)
+        gegner_match = re.search(
+            r'Gegner(?:in)?[\s:]*\n?\s*([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.&]+?)(?:\n|Mandant|Gläubiger|Aktenzeichen|Geb|geb|geboren|\d{5}|$)',
+            full_text, re.IGNORECASE
+        )
+        if gegner_match:
+            debtor = gegner_match.group(1).strip()
+
+        # Format 2: "Schuldner:" Format
+        if debtor == "Unbekannter Schuldner":
+            schuld_match = re.search(
+                r'Schuldner(?:in)?[\s:]+([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.&]+?)(?:\n|geboren|wohnhaft|$)',
+                full_text, re.IGNORECASE
+            )
+            if schuld_match:
+                debtor = schuld_match.group(1).strip()
+
+        # Format 3: "Beklagter:" Format
+        if debtor == "Unbekannter Schuldner":
+            bekl_match = re.search(
+                r'Beklagte[r]?[\s:]+([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.&]+?)(?:\n|geboren|$)',
+                full_text, re.IGNORECASE
+            )
+            if bekl_match:
+                debtor = bekl_match.group(1).strip()
+
+        # Format 4: "gegen [Name]" in Schriftsätzen
+        if debtor == "Unbekannter Schuldner":
+            gegen_match = re.search(
+                r'\sgegen\s+([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.]+?)(?:\n|,|wegen|$)',
+                full_text, re.IGNORECASE
+            )
+            if gegen_match:
+                debtor = gegen_match.group(1).strip()
+
+        # Bereinigung der Namen
+        for field in ['creditor', 'debtor']:
+            value = creditor if field == 'creditor' else debtor
+            # Mehrfache Leerzeichen entfernen
+            value = re.sub(r'\s+', ' ', value)
+            # Führende/trailing Satzzeichen entfernen
+            value = value.strip(',.-:; \n\t')
+            # Maximal 60 Zeichen
+            value = value[:60]
+            if field == 'creditor':
+                creditor = value
+            else:
+                debtor = value
+
+        # === ADRESSEN EXTRAHIEREN ===
+        # Suche nach Straße + PLZ + Ort Pattern
+        address_pattern = r'([A-Za-zäöüÄÖÜß\-\.]+(?:straße|str\.?|weg|platz|allee|gasse|ring|damm|ufer)\s*\d+[a-zA-Z]?)\s*[,\n]?\s*(\d{5})\s+([A-Za-zäöüÄÖÜß\-]+)'
+
+        addr_matches = re.findall(address_pattern, full_text, re.IGNORECASE)
+        if addr_matches:
+            # Erste Adresse oft Mandant, letzte oft Gegner
+            if len(addr_matches) >= 2:
+                cred_addr = addr_matches[0]
+                creditor_address = f"{cred_addr[0]}\n{cred_addr[1]} {cred_addr[2]}"
+                deb_addr = addr_matches[-1]
+                debtor_address = f"{deb_addr[0]}\n{deb_addr[1]} {deb_addr[2]}"
+            elif len(addr_matches) == 1:
+                deb_addr = addr_matches[0]
+                debtor_address = f"{deb_addr[0]}\n{deb_addr[1]} {deb_addr[2]}"
 
         # Inhaltsverzeichnis parsen - Dokumente identifizieren mit Kategorien
         documents = []
@@ -1161,7 +1204,7 @@ def parse_ra_micro_pdf(pdf_file):
             'enforcement': enforcement,
             'principal': hauptforderung,
             'num_pages': num_pages,
-            'raw_text_preview': full_text[:500] + '...' if len(full_text) > 500 else full_text
+            'raw_text_preview': full_text[:3000] + '...' if len(full_text) > 3000 else full_text
         }
 
     except Exception as e:
@@ -1248,6 +1291,12 @@ def show_ra_micro_import():
                             c1.write(f"📄 {doc['name']}")
                             c2.write(doc['type'])
                             c3.write(f"Seite {doc['page']}")
+
+            # Debug: Extrahierter Text anzeigen
+            with st.expander("🔍 Extrahierter PDF-Text (Debug)"):
+                st.caption("Falls Mandant/Gegner nicht erkannt wurden, suchen Sie hier nach den korrekten Bezeichnungen:")
+                st.text_area("PDF-Text (erste 2000 Zeichen)", result.get('raw_text_preview', 'Kein Text extrahiert')[:2000], height=200, disabled=True)
+                st.info("💡 Tipp: Suchen Sie nach 'Mandant', 'Gegner', 'Gläubiger', 'Schuldner' im Text")
 
             st.divider()
 
@@ -1471,10 +1520,11 @@ def lawyer_dashboard():
 def show_lawyer_overview():
     st.markdown("## 📊 Kanzlei-Dashboard")
 
-    total = len(DEMO_CASES)
-    offen = sum(1 for c in DEMO_CASES if c['status'] == 'offen')
-    mahn = sum(1 for c in DEMO_CASES if c['status'] == 'mahnverfahren')
-    vollstr = sum(1 for c in DEMO_CASES if c['status'] == 'vollstreckung')
+    all_cases = get_all_cases()
+    total = len(all_cases)
+    offen = sum(1 for c in all_cases if c['status'] == 'offen')
+    mahn = sum(1 for c in all_cases if c['status'] == 'mahnverfahren')
+    vollstr = sum(1 for c in all_cases if c['status'] == 'vollstreckung')
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("📁 Gesamt", total)
@@ -1482,7 +1532,7 @@ def show_lawyer_overview():
     c3.metric("🟠 Mahnverfahren", mahn)
     c4.metric("🔴 Vollstreckung", vollstr)
 
-    total_claims = sum(c['principal'] for c in DEMO_CASES)
+    total_claims = sum(c['principal'] for c in all_cases)
     st.metric("💰 Gesamtforderungen", fmt_curr(total_claims))
 
     st.divider()
@@ -1660,7 +1710,9 @@ def show_new_case():
 
 def show_case_detail():
     case_id = st.session_state.selected_case
-    case = next((c for c in DEMO_CASES if c['id'] == case_id), None)
+    # Alle Akten durchsuchen (inkl. importierter)
+    all_cases = get_all_cases()
+    case = next((c for c in all_cases if c['id'] == case_id), None)
     if not case:
         st.error("Akte nicht gefunden")
         return
