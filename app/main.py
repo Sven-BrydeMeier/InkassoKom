@@ -318,42 +318,55 @@ def replace_placeholders_in_docx(docx_bytes, placeholders):
         # Dokument aus Bytes laden
         doc = Document(io.BytesIO(docx_bytes))
 
+        def replace_in_paragraph(paragraph, placeholders):
+            """Ersetzt Platzhalter in einem Paragraphen - auch wenn über Runs verteilt"""
+            # Gesamten Text des Paragraphen holen
+            full_text = paragraph.text
+
+            # Prüfen ob überhaupt ein Platzhalter vorhanden ist
+            has_placeholder = any(ph in full_text for ph in placeholders.keys())
+            if not has_placeholder:
+                return
+
+            # Alle Platzhalter ersetzen
+            new_text = full_text
+            for placeholder, value in placeholders.items():
+                if placeholder in new_text:
+                    new_text = new_text.replace(placeholder, str(value) if value else '')
+
+            # Wenn Text geändert wurde, Paragraph neu aufbauen
+            if new_text != full_text:
+                # Formatting des ersten Runs merken (falls vorhanden)
+                if paragraph.runs:
+                    first_run = paragraph.runs[0]
+                    # Alle Runs löschen
+                    for run in paragraph.runs:
+                        run.text = ''
+                    # Neuen Text in ersten Run setzen
+                    first_run.text = new_text
+                else:
+                    # Kein Run vorhanden, neuen erstellen
+                    paragraph.add_run(new_text)
+
         # Durch alle Paragraphen iterieren
         for paragraph in doc.paragraphs:
-            for placeholder, value in placeholders.items():
-                if placeholder in paragraph.text:
-                    # Inline-Ersetzung
-                    for run in paragraph.runs:
-                        if placeholder in run.text:
-                            run.text = run.text.replace(placeholder, str(value))
+            replace_in_paragraph(paragraph, placeholders)
 
         # Durch alle Tabellen iterieren
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
-                        for placeholder, value in placeholders.items():
-                            if placeholder in paragraph.text:
-                                for run in paragraph.runs:
-                                    if placeholder in run.text:
-                                        run.text = run.text.replace(placeholder, str(value))
+                        replace_in_paragraph(paragraph, placeholders)
 
         # Header und Footer
         for section in doc.sections:
             # Header
             for paragraph in section.header.paragraphs:
-                for placeholder, value in placeholders.items():
-                    if placeholder in paragraph.text:
-                        for run in paragraph.runs:
-                            if placeholder in run.text:
-                                run.text = run.text.replace(placeholder, str(value))
+                replace_in_paragraph(paragraph, placeholders)
             # Footer
             for paragraph in section.footer.paragraphs:
-                for placeholder, value in placeholders.items():
-                    if placeholder in paragraph.text:
-                        for run in paragraph.runs:
-                            if placeholder in run.text:
-                                run.text = run.text.replace(placeholder, str(value))
+                replace_in_paragraph(paragraph, placeholders)
 
         # Als Bytes zurückgeben
         output = io.BytesIO()
