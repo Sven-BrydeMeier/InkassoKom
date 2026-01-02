@@ -386,9 +386,17 @@ def generate_document_from_template(case, template_key='briefkopf_docx'):
     """Generiert ein Word-Dokument aus der Vorlage mit Platzhalter-Ersetzung"""
     template_bytes = st.session_state.templates.get(template_key)
     if not template_bytes:
+        st.error("❌ Keine Word-Vorlage gefunden!")
         return None
 
     placeholders = get_case_placeholders(case)
+
+    # Debug: Zeige welche Platzhalter verwendet werden
+    with st.expander("🔍 Debug: Verwendete Platzhalter"):
+        for key, value in placeholders.items():
+            if value:  # Nur nicht-leere Werte anzeigen
+                st.text(f"{key} → {value}")
+
     return replace_placeholders_in_docx(template_bytes, placeholders)
 
 def get_all_cases():
@@ -3330,16 +3338,32 @@ def show_vorlagen():
                     case_nr = test_case_docx.split(" - ")[0]
                     case = next((c for c in all_cases if c['nr'] == case_nr), None)
                     if case:
+                        # Debug: Zeige Akten-Daten
+                        with st.expander("📋 Debug: Akte-Daten"):
+                            st.json({
+                                'nr': case.get('nr'),
+                                'creditor': case.get('creditor'),
+                                'debtor': case.get('debtor'),
+                                'creditor_address': case.get('creditor_address'),
+                                'debtor_address': case.get('debtor_address'),
+                                'principal': case.get('principal'),
+                            })
+
                         result = generate_document_from_template(case)
                         if result:
+                            debtor_name = case.get('debtor', 'Schuldner').split()[-1] if case.get('debtor') else 'Schuldner'
                             st.download_button(
                                 "⬇️ Generiertes Dokument herunterladen",
                                 data=result,
-                                file_name=f"Schreiben_{case['nr'].replace('/', '-')}_{case['debtor'].split()[-1]}.docx",
+                                file_name=f"Schreiben_{case['nr'].replace('/', '-')}_{debtor_name}.docx",
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                 type="primary"
                             )
                             st.success("✅ Dokument wurde mit Aktendaten befüllt!")
+                        else:
+                            st.error("❌ Dokument konnte nicht generiert werden!")
+                    else:
+                        st.error(f"❌ Akte '{case_nr}' nicht gefunden!")
 
         st.divider()
 
