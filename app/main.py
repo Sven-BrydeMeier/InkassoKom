@@ -63,6 +63,8 @@ if 'case_events' not in st.session_state:
 # Vorlagen-System
 if 'templates' not in st.session_state:
     st.session_state.templates = {
+        'briefkopf_docx': None,  # Word-Dokument als Bytes
+        'briefkopf_filename': None,  # Dateiname des hochgeladenen Word-Dokuments
         'briefkopf': """Kanzlei Müller & Partner
 Rechtsanwälte
 Musterstraße 123
@@ -231,6 +233,150 @@ DEMO_BOOKINGS = {
 
 def fmt_curr(amt): return f"{amt:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 def fmt_date(d): return d.strftime("%d.%m.%Y") if d else "-"
+
+# =============================================================================
+# WORD DOCUMENT HELPER FUNCTIONS
+# =============================================================================
+
+def get_case_placeholders(case):
+    """Erstellt ein Dictionary mit allen Platzhaltern für eine Akte"""
+    if not case:
+        return {}
+
+    s, h, o = get_balance(case['id'])
+
+    # Aktenkurzbezeichnung erstellen
+    creditor_kurz = case.get('creditor', '').split()[0] if case.get('creditor') else 'Mandant'
+    debtor_kurz = case.get('debtor', '').split()[-1] if case.get('debtor') else 'Gegner'
+    kurzbezeichnung = f"{creditor_kurz} ./. {debtor_kurz}"
+
+    # Anrede ermitteln
+    vorname = case.get('debtor', '').split()[0] if case.get('debtor') else ''
+    weibliche_vornamen = ['Anna', 'Maria', 'Lisa', 'Julia', 'Laura', 'Sophie', 'Emma', 'Lena', 'Sarah', 'Claudia', 'Petra', 'Sabine', 'Monika', 'Susanne', 'Martina']
+    anrede = 'Frau' if vorname in weibliche_vornamen else 'Herr'
+    anrede_brief = 'Sehr geehrte Frau' if vorname in weibliche_vornamen else 'Sehr geehrter Herr'
+
+    return {
+        # Akte
+        '[AKTENZEICHEN]': case.get('nr', ''),
+        '[KURZBEZEICHNUNG]': kurzbezeichnung,
+        '[BETREFF]': case.get('subject', ''),
+        '[STATUS]': case.get('status', '').title(),
+
+        # Gläubiger/Mandant
+        '[MANDANT]': case.get('creditor', ''),
+        '[GLÄUBIGER]': case.get('creditor', ''),
+        '[MANDANT_ADRESSE]': case.get('creditor_address', ''),
+        '[GLÄUBIGER_ADRESSE]': case.get('creditor_address', ''),
+
+        # Schuldner/Gegner
+        '[GEGNER]': case.get('debtor', ''),
+        '[SCHULDNER]': case.get('debtor', ''),
+        '[SCHULDNER_NAME]': case.get('debtor', ''),
+        '[GEGNER_ADRESSE]': case.get('debtor_address', ''),
+        '[SCHULDNER_ADRESSE]': case.get('debtor_address', ''),
+        '[ANREDE]': anrede,
+        '[ANREDE_BRIEF]': anrede_brief,
+        '[NACHNAME_SCHULDNER]': debtor_kurz,
+
+        # Beträge
+        '[HAUPTFORDERUNG]': fmt_curr(case.get('principal', 0)),
+        '[FORDERUNG_GESAMT]': fmt_curr(o),
+        '[OFFEN]': fmt_curr(o),
+        '[GEZAHLT]': fmt_curr(h),
+        '[SOLL]': fmt_curr(s),
+        '[ZINSSATZ]': f"{case.get('interest', 5.0)}%",
+
+        # Datum/Fristen
+        '[DATUM]': fmt_date(date.today()),
+        '[HEUTE]': fmt_date(date.today()),
+        '[FRIST_7]': fmt_date(date.today() + timedelta(days=7)),
+        '[FRIST_14]': fmt_date(date.today() + timedelta(days=14)),
+        '[FRIST]': fmt_date(date.today() + timedelta(days=14)),
+        '[FÄLLIGKEIT]': fmt_date(case.get('due_date', date.today())),
+
+        # Kanzleidaten
+        '[BRIEFKOPF]': st.session_state.templates.get('briefkopf', ''),
+        '[SIGNATUR]': st.session_state.templates.get('email_signatur', ''),
+        '[KANZLEI]': st.session_state.kanzlei_daten.get('name', ''),
+        '[BANKVERBINDUNG]': f"{st.session_state.kanzlei_daten.get('bank', '')}\nIBAN: {st.session_state.kanzlei_daten.get('iban', '')}",
+        '[IBAN]': st.session_state.kanzlei_daten.get('iban', ''),
+        '[BIC]': st.session_state.kanzlei_daten.get('bic', ''),
+
+        # Mahnverfahren (falls vorhanden)
+        '[MB_AZ]': case.get('mb_az', ''),
+        '[MB_GERICHT]': case.get('mb_gericht', ''),
+        '[VB_AZ]': case.get('vb_az', ''),
+    }
+
+
+def replace_placeholders_in_docx(docx_bytes, placeholders):
+    """Ersetzt Platzhalter in einem Word-Dokument"""
+    try:
+        from docx import Document
+
+        # Dokument aus Bytes laden
+        doc = Document(io.BytesIO(docx_bytes))
+
+        # Durch alle Paragraphen iterieren
+        for paragraph in doc.paragraphs:
+            for placeholder, value in placeholders.items():
+                if placeholder in paragraph.text:
+                    # Inline-Ersetzung
+                    for run in paragraph.runs:
+                        if placeholder in run.text:
+                            run.text = run.text.replace(placeholder, str(value))
+
+        # Durch alle Tabellen iterieren
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        for placeholder, value in placeholders.items():
+                            if placeholder in paragraph.text:
+                                for run in paragraph.runs:
+                                    if placeholder in run.text:
+                                        run.text = run.text.replace(placeholder, str(value))
+
+        # Header und Footer
+        for section in doc.sections:
+            # Header
+            for paragraph in section.header.paragraphs:
+                for placeholder, value in placeholders.items():
+                    if placeholder in paragraph.text:
+                        for run in paragraph.runs:
+                            if placeholder in run.text:
+                                run.text = run.text.replace(placeholder, str(value))
+            # Footer
+            for paragraph in section.footer.paragraphs:
+                for placeholder, value in placeholders.items():
+                    if placeholder in paragraph.text:
+                        for run in paragraph.runs:
+                            if placeholder in run.text:
+                                run.text = run.text.replace(placeholder, str(value))
+
+        # Als Bytes zurückgeben
+        output = io.BytesIO()
+        doc.save(output)
+        output.seek(0)
+        return output.getvalue()
+
+    except ImportError:
+        st.error("❌ python-docx ist nicht installiert. Bitte installieren Sie es mit: pip install python-docx")
+        return None
+    except Exception as e:
+        st.error(f"❌ Fehler beim Verarbeiten des Word-Dokuments: {str(e)}")
+        return None
+
+
+def generate_document_from_template(case, template_key='briefkopf_docx'):
+    """Generiert ein Word-Dokument aus der Vorlage mit Platzhalter-Ersetzung"""
+    template_bytes = st.session_state.templates.get(template_key)
+    if not template_bytes:
+        return None
+
+    placeholders = get_case_placeholders(case)
+    return replace_placeholders_in_docx(template_bytes, placeholders)
 
 def get_all_cases():
     """Gibt alle Akten zurück (Demo + importierte)"""
@@ -1766,8 +1912,10 @@ def show_case_detail():
             st.session_state[f'show_zahlung_{case_id}'] = False
         if f'show_ra_calc_{case_id}' not in st.session_state:
             st.session_state[f'show_ra_calc_{case_id}'] = False
+        if f'show_schreiben_{case_id}' not in st.session_state:
+            st.session_state[f'show_schreiben_{case_id}'] = False
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         if c1.button("📝 Mahnung", use_container_width=True, key=f"btn_mahn_{case_id}"):
             st.session_state[f'show_mahnung_{case_id}'] = True
         if c2.button("⚖️ MB beantragen", use_container_width=True, key=f"btn_mb_{case_id}"):
@@ -1776,8 +1924,61 @@ def show_case_detail():
             st.session_state[f'show_zahlung_{case_id}'] = True
         if c4.button("💶 RA-Gebühren", use_container_width=True, key=f"btn_rag_{case_id}"):
             st.session_state[f'show_ra_calc_{case_id}'] = True
-        if c5.button("📄 Upload", use_container_width=True, key=f"btn_upl_{case_id}"):
+        if c5.button("📄 Word", use_container_width=True, key=f"btn_word_{case_id}"):
+            st.session_state[f'show_schreiben_{case_id}'] = True
+        if c6.button("📤 Upload", use_container_width=True, key=f"btn_upl_{case_id}"):
             st.session_state.page = 'case_detail'  # Scroll to documents tab
+
+        # Word-Schreiben generieren Dialog
+        if st.session_state.get(f'show_schreiben_{case_id}', False):
+            with st.expander("📄 Schreiben aus Word-Vorlage generieren", expanded=True):
+                if st.session_state.templates.get('briefkopf_docx'):
+                    st.markdown("#### Word-Dokument mit Aktendaten erstellen")
+
+                    # Zeige Platzhalter-Vorschau
+                    placeholders = get_case_placeholders(case)
+                    with st.expander("📋 Platzhalter-Werte (Vorschau)"):
+                        preview_items = [
+                            ('[AKTENZEICHEN]', placeholders.get('[AKTENZEICHEN]', '')),
+                            ('[KURZBEZEICHNUNG]', placeholders.get('[KURZBEZEICHNUNG]', '')),
+                            ('[GEGNER]', placeholders.get('[GEGNER]', '')),
+                            ('[GEGNER_ADRESSE]', placeholders.get('[GEGNER_ADRESSE]', '')),
+                            ('[MANDANT]', placeholders.get('[MANDANT]', '')),
+                            ('[FORDERUNG_GESAMT]', placeholders.get('[FORDERUNG_GESAMT]', '')),
+                        ]
+                        for key, val in preview_items:
+                            st.text(f"{key}: {val}")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Dokument generieren", type="primary", key=f"gen_word_{case_id}"):
+                            result = generate_document_from_template(case)
+                            if result:
+                                st.session_state[f'generated_doc_{case_id}'] = result
+                                st.success("✅ Dokument wurde generiert!")
+                                st.rerun()
+                    with col2:
+                        if st.button("❌ Schließen", key=f"close_word_{case_id}"):
+                            st.session_state[f'show_schreiben_{case_id}'] = False
+                            st.rerun()
+
+                    # Download-Button wenn Dokument generiert
+                    if st.session_state.get(f'generated_doc_{case_id}'):
+                        debtor_name = case['debtor'].split()[-1] if case.get('debtor') else 'Schuldner'
+                        st.download_button(
+                            "⬇️ Word-Dokument herunterladen",
+                            data=st.session_state[f'generated_doc_{case_id}'],
+                            file_name=f"Schreiben_{case['nr'].replace('/', '-')}_{debtor_name}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            type="primary",
+                            key=f"dl_word_{case_id}"
+                        )
+                else:
+                    st.warning("⚠️ Keine Word-Vorlage hochgeladen!")
+                    st.info("Gehen Sie zu **Vorlagen** → **Briefkopf & Signatur** und laden Sie Ihren Kanzlei-Briefkopf als Word-Dokument hoch.")
+                    if st.button("📋 Zu den Vorlagen", key=f"goto_tpl_{case_id}"):
+                        st.session_state.page = 'templates'
+                        st.rerun()
 
         # Mahnung Dialog
         if st.session_state.get(f'show_mahnung_{case_id}', False):
@@ -3047,14 +3248,97 @@ def show_vorlagen():
     tab1, tab2, tab3, tab4 = st.tabs(["📝 Briefkopf & Signatur", "📬 Schreiben", "⚖️ Klagen & Schriftsätze", "🏢 Kanzleidaten"])
 
     with tab1:
-        st.markdown("### Briefkopf")
+        st.markdown("### 📄 Word-Briefkopf (Empfohlen)")
+        st.info("""
+        **Laden Sie Ihren Kanzlei-Briefkopf als Word-Dokument (.docx) hoch.**
+
+        Verwenden Sie folgende Platzhalter in Ihrem Dokument:
+
+        | Platzhalter | Wird ersetzt durch |
+        |-------------|-------------------|
+        | `[AKTENZEICHEN]` | Aktenzeichen (z.B. 975/25) |
+        | `[KURZBEZEICHNUNG]` | Mandant ./. Gegner |
+        | `[DATUM]` | Aktuelles Datum |
+        | `[GEGNER]` / `[SCHULDNER]` | Name des Schuldners |
+        | `[GEGNER_ADRESSE]` | Adresse des Schuldners |
+        | `[MANDANT]` / `[GLÄUBIGER]` | Name des Mandanten |
+        | `[HAUPTFORDERUNG]` | Hauptforderungsbetrag |
+        | `[FORDERUNG_GESAMT]` | Gesamtforderung |
+        | `[ANREDE_BRIEF]` | "Sehr geehrter Herr" / "Sehr geehrte Frau" |
+        | `[FRIST]` | Zahlungsfrist (14 Tage) |
+        | `[BANKVERBINDUNG]` | Kanzlei-Bankverbindung |
+        """)
+
+        # Aktuell hochgeladene Vorlage anzeigen
+        if st.session_state.templates.get('briefkopf_docx'):
+            filename = st.session_state.templates.get('briefkopf_filename', 'Briefkopf.docx')
+            st.success(f"✅ **Aktive Vorlage:** {filename}")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    "⬇️ Vorlage herunterladen",
+                    data=st.session_state.templates['briefkopf_docx'],
+                    file_name=filename,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            with col2:
+                if st.button("🗑️ Vorlage entfernen", key="remove_docx"):
+                    st.session_state.templates['briefkopf_docx'] = None
+                    st.session_state.templates['briefkopf_filename'] = None
+                    st.rerun()
+
+        # Upload neuer Vorlage
+        uploaded_docx = st.file_uploader(
+            "Word-Dokument hochladen (.docx)",
+            type=['docx'],
+            key="upload_briefkopf"
+        )
+
+        if uploaded_docx:
+            if st.button("✅ Als Briefkopf-Vorlage speichern", type="primary", key="save_docx"):
+                docx_bytes = uploaded_docx.getvalue()
+                st.session_state.templates['briefkopf_docx'] = docx_bytes
+                st.session_state.templates['briefkopf_filename'] = uploaded_docx.name
+                st.success(f"✅ '{uploaded_docx.name}' wurde als Briefkopf-Vorlage gespeichert!")
+                st.rerun()
+
+        # Test-Bereich für Word-Vorlage
+        if st.session_state.templates.get('briefkopf_docx'):
+            st.divider()
+            st.markdown("### 🧪 Word-Vorlage testen")
+
+            all_cases = get_all_cases()
+            if all_cases:
+                case_options = [f"{c['nr']} - {c['debtor']}" for c in all_cases]
+                test_case_docx = st.selectbox("Akte für Test wählen", case_options, key="test_case_docx")
+
+                if st.button("📄 Word-Dokument generieren", type="primary", key="gen_docx"):
+                    case_nr = test_case_docx.split(" - ")[0]
+                    case = next((c for c in all_cases if c['nr'] == case_nr), None)
+                    if case:
+                        result = generate_document_from_template(case)
+                        if result:
+                            st.download_button(
+                                "⬇️ Generiertes Dokument herunterladen",
+                                data=result,
+                                file_name=f"Schreiben_{case['nr'].replace('/', '-')}_{case['debtor'].split()[-1]}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                type="primary"
+                            )
+                            st.success("✅ Dokument wurde mit Aktendaten befüllt!")
+
+        st.divider()
+
+        st.markdown("### 📝 Text-Briefkopf (Fallback)")
+        st.caption("Wird verwendet wenn kein Word-Dokument hochgeladen wurde")
         briefkopf = st.text_area(
-            "Briefkopf-Vorlage",
+            "Briefkopf-Vorlage (Text)",
             value=st.session_state.templates.get('briefkopf', ''),
-            height=200,
+            height=150,
             key="tpl_briefkopf"
         )
-        if st.button("💾 Briefkopf speichern", key="save_briefkopf"):
+        if st.button("💾 Text-Briefkopf speichern", key="save_briefkopf"):
             st.session_state.templates['briefkopf'] = briefkopf
             st.success("✅ Gespeichert!")
 
