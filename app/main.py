@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2025.01.02-1430"
+APP_VERSION = "v2026.01.02-0915"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -513,6 +513,63 @@ def get_balance(case_id):
     s = sum(x['amount'] for x in b if x['type'] == 'S')
     h = sum(x['amount'] for x in b if x['type'] == 'H')
     return s, h, s - h
+
+def calculate_interest_for_case(case, bookings):
+    """
+    Berechnet die aktuellen Verzugszinsen für eine Akte.
+    Zinsen werden auf die offene Hauptforderung ab Fälligkeitsdatum berechnet.
+
+    Args:
+        case: Die Akten-Daten mit 'due_date', 'interest', 'principal'
+        bookings: Liste der Buchungen
+
+    Returns:
+        float: Berechnete Zinsen bis heute
+    """
+    if not case:
+        return 0.0
+
+    # Zinssatz aus der Akte (Standard: 5% über Basiszins, ca. 8-9% gesamt)
+    zinssatz = case.get('interest', 5.0)
+
+    # Fälligkeitsdatum
+    faellig = case.get('due_date')
+    if not faellig:
+        # Falls kein Fälligkeitsdatum, erstes Buchungsdatum verwenden
+        soll_buchungen = [b for b in bookings if b['type'] == 'S']
+        if soll_buchungen:
+            faellig = min(b['date'] for b in soll_buchungen)
+        else:
+            return 0.0
+
+    # Sicherstellen, dass faellig ein date-Objekt ist
+    if isinstance(faellig, datetime):
+        faellig = faellig.date()
+
+    # Tage seit Fälligkeit
+    heute = date.today()
+    if faellig >= heute:
+        return 0.0  # Noch nicht fällig
+
+    verzugstage = (heute - faellig).days
+
+    # Hauptforderung ermitteln
+    hauptforderung = case.get('principal', 0)
+    if hauptforderung == 0:
+        # Versuche aus Buchungen zu ermitteln
+        for b in bookings:
+            if b['type'] == 'S' and b.get('cat') in ['Hauptforderung', 'Rechnung', 'Kaufpreis', 'Mietrückstand']:
+                hauptforderung += b['amount']
+
+    # Zahlungen abziehen (chronologisch berücksichtigen)
+    zahlungen = sum(b['amount'] for b in bookings if b['type'] == 'H')
+    offene_forderung = max(0, hauptforderung - zahlungen)
+
+    # Einfache Zinsberechnung: Hauptforderung * (Zinssatz/100) * (Tage/365)
+    # Für genauere Berechnung müsste man Teilzahlungen chronologisch berücksichtigen
+    zinsen = offene_forderung * (zinssatz / 100) * (verzugstage / 365)
+
+    return round(zinsen, 2)
 
 def logout():
     st.session_state.authenticated = False
@@ -2165,36 +2222,140 @@ def show_case_detail():
 
     with tab2:
         st.markdown("### 💰 Forderungskonto")
-        bookings = DEMO_BOOKINGS.get(case_id, [])
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Soll", fmt_curr(s))
-        c2.metric("Haben", fmt_curr(h))
-        c3.metric("Offen", fmt_curr(o))
+        # Alle Buchungen holen (inkl. importierte)
+        bookings = get_all_bookings(case_id)
+
+        # Wenn keine Buchungen vorhanden, Standard-Buchungen erstellen
+        if not bookings:
+            st.warning("⚠️ Kein Forderungskonto vorhanden. Erstelle Standard-Buchungen...")
+            # Standard-Buchung basierend auf Hauptforderung erstellen
+            default_bookings = [
+                {
+                    'date': case.get('due_date', date.today() - timedelta(days=60)),
+                    'type': 'S',
+                    'amount': case.get('principal', 0),
+                    'cat': 'Hauptforderung',
+                    'desc': case.get('leistung', 'Hauptforderung aus Vertrag')
+                }
+            ]
+            # Zu session state hinzufügen
+            if case_id not in st.session_state.imported_bookings:
+                st.session_state.imported_bookings[case_id] = []
+            st.session_state.imported_bookings[case_id].extend(default_bookings)
+            bookings = default_bookings
+
+        # Zinsen berechnen und aktualisieren
+        zinsen_berechnet = calculate_interest_for_case(case, bookings)
+
+        # Übersicht mit aktualisierten Werten
+        total_soll = sum(b['amount'] for b in bookings if b['type'] == 'S')
+        total_haben = sum(b['amount'] for b in bookings if b['type'] == 'H')
+        total_offen = total_soll + zinsen_berechnet - total_haben
+
+        # Metriken in 4 Spalten
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("📊 Hauptforderung", fmt_curr(case.get('principal', 0)))
+        c2.metric("📈 Zinsen (aktuell)", fmt_curr(zinsen_berechnet))
+        c3.metric("💳 Zahlungen", fmt_curr(total_haben))
+        c4.metric("💰 Offen gesamt", fmt_curr(total_offen))
 
         st.divider()
-        for b in sorted(bookings, key=lambda x: x['date'], reverse=True):
-            c1, c2, c3, c4 = st.columns([2, 3, 2, 2])
-            c1.write(fmt_date(b['date']))
-            c2.write(b['desc'])
-            c3.write(b['cat'])
-            if b['type'] == 'S':
-                c4.write(f"+{fmt_curr(b['amount'])}")
-            else:
-                c4.markdown(f"**-{fmt_curr(b['amount'])}**")
-            st.divider()
 
+        # Forderungskonto-Tabelle mit laufender Summe
+        st.markdown("#### 📋 Kontobewegungen")
+
+        # Tabellenkopf
+        col_date, col_desc, col_cat, col_soll, col_haben, col_saldo = st.columns([1.5, 3, 2, 1.5, 1.5, 1.5])
+        col_date.markdown("**Datum**")
+        col_desc.markdown("**Beschreibung**")
+        col_cat.markdown("**Kategorie**")
+        col_soll.markdown("**Soll (+)**")
+        col_haben.markdown("**Haben (-)**")
+        col_saldo.markdown("**Saldo**")
+
+        st.divider()
+
+        # Buchungen chronologisch sortieren und mit laufendem Saldo anzeigen
+        laufender_saldo = 0.0
+        for b in sorted(bookings, key=lambda x: x['date']):
+            if b['type'] == 'S':
+                laufender_saldo += b['amount']
+                soll_text = f"+{fmt_curr(b['amount'])}"
+                haben_text = ""
+            else:
+                laufender_saldo -= b['amount']
+                soll_text = ""
+                haben_text = f"-{fmt_curr(b['amount'])}"
+
+            col_date, col_desc, col_cat, col_soll, col_haben, col_saldo = st.columns([1.5, 3, 2, 1.5, 1.5, 1.5])
+            col_date.write(fmt_date(b['date']))
+            col_desc.write(b.get('desc', '-'))
+            col_cat.write(b.get('cat', '-'))
+
+            if b['type'] == 'S':
+                col_soll.markdown(f"<span style='color: #d9534f'>{soll_text}</span>", unsafe_allow_html=True)
+            else:
+                col_soll.write("")
+
+            if b['type'] == 'H':
+                col_haben.markdown(f"<span style='color: #5cb85c'>{haben_text}</span>", unsafe_allow_html=True)
+            else:
+                col_haben.write("")
+
+            col_saldo.write(fmt_curr(laufender_saldo))
+
+        # Zinsen als separate Zeile (immer aktuell)
+        if zinsen_berechnet > 0:
+            st.divider()
+            col_date, col_desc, col_cat, col_soll, col_haben, col_saldo = st.columns([1.5, 3, 2, 1.5, 1.5, 1.5])
+            col_date.write(fmt_date(date.today()))
+            col_desc.write(f"Verzugszinsen ({case.get('interest', 5.0)}% p.a.)")
+            col_cat.write("Zinsen")
+            col_soll.markdown(f"<span style='color: #d9534f'>+{fmt_curr(zinsen_berechnet)}</span>", unsafe_allow_html=True)
+            col_haben.write("")
+            col_saldo.markdown(f"**{fmt_curr(laufender_saldo + zinsen_berechnet)}**")
+
+        # Endsumme
+        st.divider()
+        col_date, col_desc, col_cat, col_soll, col_haben, col_saldo = st.columns([1.5, 3, 2, 1.5, 1.5, 1.5])
+        col_date.write("")
+        col_desc.markdown("**GESAMT**")
+        col_cat.write("")
+        col_soll.markdown(f"**{fmt_curr(total_soll + zinsen_berechnet)}**")
+        col_haben.markdown(f"**{fmt_curr(total_haben)}**")
+        col_saldo.markdown(f"**{fmt_curr(total_offen)}**")
+
+        st.divider()
+
+        # Buchung hinzufügen
         with st.expander("➕ Buchung hinzufügen"):
             c1, c2 = st.columns(2)
             with c1:
-                b_type = st.selectbox("Art", ["Zahlung (Haben)", "Kosten (Soll)"])
-                b_amt = st.number_input("Betrag", min_value=0.0)
+                b_type = st.selectbox("Art", ["Zahlung (Haben)", "Kosten (Soll)"], key=f"b_type_{case_id}")
+                b_amt = st.number_input("Betrag", min_value=0.0, key=f"b_amt_{case_id}")
             with c2:
-                b_date = st.date_input("Datum", value=date.today())
-                b_cat = st.selectbox("Kategorie", ["Zahlung", "Zinsen", "RA-Gebühren", "Gerichtskosten"])
-            b_desc = st.text_input("Beschreibung")
-            if st.button("💾 Speichern", type="primary"):
-                st.success("✅ Buchung gespeichert!")
+                b_date = st.date_input("Datum", value=date.today(), key=f"b_date_{case_id}")
+                b_cat = st.selectbox("Kategorie",
+                    ["Zahlung", "Teilzahlung", "Hauptforderung", "Zinsen", "RA-Gebühren",
+                     "Gerichtskosten", "Mahnkosten", "Inkassokosten", "Auslagen", "Sonstiges"],
+                    key=f"b_cat_{case_id}")
+            b_desc = st.text_input("Beschreibung", key=f"b_desc_{case_id}")
+
+            if st.button("💾 Buchung speichern", type="primary", key=f"save_booking_{case_id}"):
+                new_booking = {
+                    'date': b_date,
+                    'type': 'H' if 'Haben' in b_type else 'S',
+                    'amount': b_amt,
+                    'cat': b_cat,
+                    'desc': b_desc if b_desc else b_cat
+                }
+                # Zu Session State hinzufügen
+                if case_id not in st.session_state.imported_bookings:
+                    st.session_state.imported_bookings[case_id] = []
+                st.session_state.imported_bookings[case_id].append(new_booking)
+                st.success(f"✅ Buchung ({b_cat}: {fmt_curr(b_amt)}) gespeichert!")
+                st.rerun()
 
     with tab3:
         show_document_explorer(case_id, case['nr'])
