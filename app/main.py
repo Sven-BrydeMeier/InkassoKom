@@ -51,7 +51,19 @@ if 'pdf_viewer_content' not in st.session_state:
     st.session_state.pdf_viewer_content = None
 # AI & Kommunikation
 if 'openai_api_key' not in st.session_state:
-    st.session_state.openai_api_key = ""
+    # Zuerst in Streamlit Secrets nachschauen
+    api_key_from_secrets = ""
+    try:
+        if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+            api_key_from_secrets = st.secrets['OPENAI_API_KEY']
+        elif hasattr(st, 'secrets') and 'openai_api_key' in st.secrets:
+            api_key_from_secrets = st.secrets['openai_api_key']
+        elif hasattr(st, 'secrets') and 'openai' in st.secrets and 'api_key' in st.secrets['openai']:
+            api_key_from_secrets = st.secrets['openai']['api_key']
+    except Exception:
+        pass
+    st.session_state.openai_api_key = api_key_from_secrets
+    st.session_state.openai_api_key_from_secrets = bool(api_key_from_secrets)
 if 'messages' not in st.session_state:
     st.session_state.messages = []  # Globale Nachrichtenliste
 if 'notifications' not in st.session_state:
@@ -1692,6 +1704,17 @@ def lawyer_dashboard():
 def show_lawyer_overview():
     st.markdown("## 📊 Kanzlei-Dashboard")
 
+    # API-Key Status anzeigen
+    if st.session_state.openai_api_key:
+        if st.session_state.get('openai_api_key_from_secrets', False):
+            st.success("🤖 **KI aktiviert** - OpenAI API-Key wurde aus Streamlit Secrets geladen")
+        else:
+            st.success("🤖 **KI aktiviert** - OpenAI API-Key ist konfiguriert")
+    else:
+        st.info("💡 **Tipp:** Hinterlegen Sie einen OpenAI API-Key in den Einstellungen oder als Streamlit Secret (`OPENAI_API_KEY`) für KI-Funktionen")
+
+    st.divider()
+
     all_cases = get_all_cases()
     total = len(all_cases)
     offen = sum(1 for c in all_cases if c['status'] == 'offen')
@@ -2501,29 +2524,51 @@ def show_settings():
 
     with tab1:
         st.markdown("### OpenAI API-Schlüssel")
-        st.info("""
-        Für die KI-gestützte Kommunikation benötigen Sie einen OpenAI API-Schlüssel.
-        Diesen erhalten Sie unter: https://platform.openai.com/api-keys
-        """)
 
-        api_key = st.text_input(
-            "API-Schlüssel",
-            value=st.session_state.openai_api_key,
-            type="password",
-            placeholder="sk-..."
-        )
+        # Prüfen ob Key aus Secrets geladen wurde
+        if st.session_state.get('openai_api_key_from_secrets', False):
+            st.success("✅ **API-Key aus Streamlit Secrets geladen**")
+            st.info("""
+            Der OpenAI API-Schlüssel wurde automatisch aus den Streamlit Secrets geladen.
 
-        if st.button("💾 API-Schlüssel speichern", type="primary"):
-            st.session_state.openai_api_key = api_key
-            if api_key:
-                st.success("✅ API-Schlüssel gespeichert!")
-            else:
-                st.info("API-Schlüssel entfernt. KI nutzt jetzt Template-basierte Antworten.")
+            Unterstützte Secret-Namen:
+            - `OPENAI_API_KEY`
+            - `openai_api_key`
+            - `openai.api_key`
+            """)
+            # Maskierten Key anzeigen
+            masked_key = st.session_state.openai_api_key[:7] + "..." + st.session_state.openai_api_key[-4:] if len(st.session_state.openai_api_key) > 15 else "***"
+            st.text_input("Geladener API-Schlüssel", value=masked_key, disabled=True)
+        else:
+            st.info("""
+            Für die KI-gestützte Kommunikation benötigen Sie einen OpenAI API-Schlüssel.
+
+            **Option 1:** Hier manuell eingeben
+            **Option 2:** In Streamlit Secrets hinterlegen als `OPENAI_API_KEY`
+
+            API-Schlüssel erhalten Sie unter: https://platform.openai.com/api-keys
+            """)
+
+            api_key = st.text_input(
+                "API-Schlüssel",
+                value=st.session_state.openai_api_key,
+                type="password",
+                placeholder="sk-..."
+            )
+
+            if st.button("💾 API-Schlüssel speichern", type="primary"):
+                st.session_state.openai_api_key = api_key
+                st.session_state.openai_api_key_from_secrets = False
+                if api_key:
+                    st.success("✅ API-Schlüssel gespeichert!")
+                else:
+                    st.info("API-Schlüssel entfernt. KI nutzt jetzt Template-basierte Antworten.")
 
         st.divider()
         st.markdown("### KI-Status")
         if st.session_state.openai_api_key:
-            st.success("✅ KI-Integration aktiv (OpenAI GPT-4)")
+            source = "aus Secrets" if st.session_state.get('openai_api_key_from_secrets', False) else "manuell konfiguriert"
+            st.success(f"✅ KI-Integration aktiv (OpenAI GPT-4) - {source}")
         else:
             st.warning("⚠️ Keine API - Template-basierte Antworten werden verwendet")
 
