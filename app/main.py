@@ -228,6 +228,38 @@ DEMO_BOOKINGS = {
 def fmt_curr(amt): return f"{amt:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
 def fmt_date(d): return d.strftime("%d.%m.%Y") if d else "-"
 
+def get_all_cases():
+    """Gibt alle Akten zurück (Demo + importierte)"""
+    all_cases = DEMO_CASES.copy()
+    # Importierte Akten hinzufügen (falls nicht bereits vorhanden)
+    for imp_case in st.session_state.get('imported_cases', []):
+        if not any(c['id'] == imp_case['id'] for c in all_cases):
+            all_cases.append(imp_case)
+    return all_cases
+
+def get_all_documents(case_id):
+    """Gibt alle Dokumente einer Akte zurück (Demo + importierte)"""
+    docs = DEMO_DOCUMENTS.get(case_id, []).copy()
+    # Importierte Dokumente hinzufügen
+    imp_docs = st.session_state.get('imported_documents', {}).get(case_id, [])
+    for imp_doc in imp_docs:
+        if not any(d['id'] == imp_doc['id'] for d in docs):
+            # Kategorie hinzufügen falls nicht vorhanden
+            if 'category' not in imp_doc:
+                imp_doc['category'] = get_document_category(imp_doc.get('type', ''))
+            docs.append(imp_doc)
+    return docs
+
+def get_all_bookings(case_id):
+    """Gibt alle Buchungen einer Akte zurück (Demo + importierte)"""
+    bookings = DEMO_BOOKINGS.get(case_id, []).copy()
+    # Importierte Buchungen hinzufügen
+    imp_bookings = st.session_state.get('imported_bookings', {}).get(case_id, [])
+    for imp_b in imp_bookings:
+        if imp_b not in bookings:
+            bookings.append(imp_b)
+    return bookings
+
 # RVG Gebührentabelle (vereinfacht, Stand 2024)
 RVG_TABELLE = [
     (500, 49.00),
@@ -294,7 +326,7 @@ def calculate_ra_kosten(streitwert: float, gebuehrensatz: float = 1.3) -> dict:
     }
 
 def get_balance(case_id):
-    b = DEMO_BOOKINGS.get(case_id, [])
+    b = get_all_bookings(case_id)
     s = sum(x['amount'] for x in b if x['type'] == 'S')
     h = sum(x['amount'] for x in b if x['type'] == 'H')
     return s, h, s - h
@@ -505,23 +537,65 @@ def get_notification_count(role):
     return sum(1 for n in st.session_state.notifications if n['user_role'] == role and not n['read'])
 
 # =============================================================================
-# DEMO-DOKUMENTE
+# DEMO-DOKUMENTE MIT KATEGORIEN
 # =============================================================================
+DOCUMENT_CATEGORIES = {
+    'aussergerichtlich': {
+        'name': 'Außergerichtlich',
+        'icon': '📬',
+        'types': ['Rechnung', 'Mahnung', 'Zahlungsaufforderung', 'Forderungsaufstellung', 'Vertrag', 'Lieferschein']
+    },
+    'gerichtlich': {
+        'name': 'Gerichtlich',
+        'icon': '⚖️',
+        'types': ['Mahnbescheid', 'Vollstreckungsbescheid', 'VB', 'PfüB', 'Klage', 'Urteil', 'Beschluss', 'Zustellung', 'EDA']
+    },
+    'intern': {
+        'name': 'Interne Kommunikation',
+        'icon': '🏢',
+        'types': ['Notiz', 'Vermerk', 'Aktennotiz', 'Berechnung', 'Intern']
+    },
+    'mandant': {
+        'name': 'Kommunikation mit Mandant',
+        'icon': '💼',
+        'types': ['Mandantenbrief', 'Sachstandsbericht', 'Abrechnung', 'Vollmacht', 'Mandant']
+    },
+    'schuldner': {
+        'name': 'Kommunikation mit Schuldner',
+        'icon': '👤',
+        'types': ['Schuldnerbrief', 'Ratenzahlungsvereinbarung', 'Vergleich', 'Schuldner']
+    }
+}
+
+def get_document_category(doc_type):
+    """Ermittelt die Kategorie eines Dokuments anhand des Typs"""
+    doc_type_lower = doc_type.lower()
+    for cat_id, cat_info in DOCUMENT_CATEGORIES.items():
+        for t in cat_info['types']:
+            if t.lower() in doc_type_lower or doc_type_lower in t.lower():
+                return cat_id
+    return 'aussergerichtlich'  # Default
+
 DEMO_DOCUMENTS = {
     'case-001': [
-        {'id': 'doc-001', 'name': 'Forderungsaufstellung.pdf', 'date': date.today(), 'type': 'Forderungsaufstellung', 'size': '245 KB'},
-        {'id': 'doc-002', 'name': 'Rechnung_2024-001.pdf', 'date': date.today() - timedelta(60), 'type': 'Rechnung', 'size': '128 KB'},
-        {'id': 'doc-003', 'name': 'Mahnung_1.pdf', 'date': date.today() - timedelta(45), 'type': 'Mahnung', 'size': '98 KB'},
+        {'id': 'doc-001', 'name': 'Forderungsaufstellung.pdf', 'date': date.today(), 'type': 'Forderungsaufstellung', 'size': '245 KB', 'category': 'aussergerichtlich'},
+        {'id': 'doc-002', 'name': 'Rechnung_2024-001.pdf', 'date': date.today() - timedelta(60), 'type': 'Rechnung', 'size': '128 KB', 'category': 'aussergerichtlich'},
+        {'id': 'doc-003', 'name': 'Mahnung_1.pdf', 'date': date.today() - timedelta(45), 'type': 'Mahnung', 'size': '98 KB', 'category': 'aussergerichtlich'},
+        {'id': 'doc-004', 'name': 'Sachstandsbericht_Mandant.pdf', 'date': date.today() - timedelta(30), 'type': 'Sachstandsbericht', 'size': '156 KB', 'category': 'mandant'},
+        {'id': 'doc-005', 'name': 'Aktennotiz.pdf', 'date': date.today() - timedelta(20), 'type': 'Aktennotiz', 'size': '45 KB', 'category': 'intern'},
     ],
     'case-002': [
-        {'id': 'doc-004', 'name': 'Kaufvertrag.pdf', 'date': date.today() - timedelta(120), 'type': 'Vertrag', 'size': '512 KB'},
-        {'id': 'doc-005', 'name': 'Mahnbescheid.pdf', 'date': date.today() - timedelta(30), 'type': 'Mahnbescheid', 'size': '156 KB'},
-        {'id': 'doc-006', 'name': 'Zustellnachweis_MB.pdf', 'date': date.today() - timedelta(14), 'type': 'Zustellung', 'size': '89 KB'},
+        {'id': 'doc-006', 'name': 'Kaufvertrag.pdf', 'date': date.today() - timedelta(120), 'type': 'Vertrag', 'size': '512 KB', 'category': 'aussergerichtlich'},
+        {'id': 'doc-007', 'name': 'Mahnbescheid.pdf', 'date': date.today() - timedelta(30), 'type': 'Mahnbescheid', 'size': '156 KB', 'category': 'gerichtlich'},
+        {'id': 'doc-008', 'name': 'Zustellnachweis_MB.pdf', 'date': date.today() - timedelta(14), 'type': 'Zustellung', 'size': '89 KB', 'category': 'gerichtlich'},
+        {'id': 'doc-009', 'name': 'Brief_an_Schuldner.pdf', 'date': date.today() - timedelta(10), 'type': 'Schuldnerbrief', 'size': '78 KB', 'category': 'schuldner'},
     ],
     'case-003': [
-        {'id': 'doc-007', 'name': 'Mietvertrag.pdf', 'date': date.today() - timedelta(365), 'type': 'Vertrag', 'size': '890 KB'},
-        {'id': 'doc-008', 'name': 'Vollstreckungsbescheid.pdf', 'date': date.today() - timedelta(60), 'type': 'VB', 'size': '178 KB'},
-        {'id': 'doc-009', 'name': 'PfueB_Antrag.pdf', 'date': date.today() - timedelta(7), 'type': 'PfüB', 'size': '234 KB'},
+        {'id': 'doc-010', 'name': 'Mietvertrag.pdf', 'date': date.today() - timedelta(365), 'type': 'Vertrag', 'size': '890 KB', 'category': 'aussergerichtlich'},
+        {'id': 'doc-011', 'name': 'Vollstreckungsbescheid.pdf', 'date': date.today() - timedelta(60), 'type': 'VB', 'size': '178 KB', 'category': 'gerichtlich'},
+        {'id': 'doc-012', 'name': 'PfueB_Antrag.pdf', 'date': date.today() - timedelta(7), 'type': 'PfüB', 'size': '234 KB', 'category': 'gerichtlich'},
+        {'id': 'doc-013', 'name': 'Vollmacht.pdf', 'date': date.today() - timedelta(180), 'type': 'Vollmacht', 'size': '120 KB', 'category': 'mandant'},
+        {'id': 'doc-014', 'name': 'Ratenzahlungsangebot.pdf', 'date': date.today() - timedelta(45), 'type': 'Ratenzahlungsvereinbarung', 'size': '95 KB', 'category': 'schuldner'},
     ],
 }
 
@@ -609,6 +683,180 @@ def show_document_viewer(doc, case_nr, key_prefix):
         # Dokumentinfo
         st.caption(f"📁 Typ: {doc['type']} | 📅 Erstellt: {fmt_date(doc['date'])}")
 
+def show_document_explorer(case_id, case_nr):
+    """
+    Dokumenten-Explorer mit Baumstruktur nach Kategorien:
+    - Außergerichtlich
+    - Gerichtlich
+    - Interne Kommunikation
+    - Kommunikation mit Mandant
+    - Kommunikation mit Schuldner
+    """
+    st.markdown("### 📁 Dokumenten-Explorer")
+
+    # Alle Dokumente der Akte abrufen
+    all_docs = get_all_documents(case_id)
+
+    if not all_docs:
+        st.info("Keine Dokumente in dieser Akte vorhanden")
+    else:
+        # Statistik
+        col1, col2, col3, col4, col5 = st.columns(5)
+        for i, (cat_id, cat_info) in enumerate(DOCUMENT_CATEGORIES.items()):
+            cat_count = len([d for d in all_docs if d.get('category', 'aussergerichtlich') == cat_id])
+            with [col1, col2, col3, col4, col5][i]:
+                st.metric(cat_info['icon'], cat_count, help=cat_info['name'])
+
+        st.divider()
+
+        # Filter und Ansicht
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            view_mode = st.radio(
+                "Ansicht",
+                ["🌳 Baumansicht", "📋 Listenansicht", "📅 Chronologisch"],
+                horizontal=True,
+                key=f"doc_view_{case_id}"
+            )
+        with col2:
+            search_doc = st.text_input("🔍 Dokument suchen", placeholder="Name oder Typ...", key=f"doc_search_{case_id}")
+
+        # Dokumente filtern
+        if search_doc:
+            all_docs = [d for d in all_docs if search_doc.lower() in d['name'].lower() or search_doc.lower() in d['type'].lower()]
+
+        st.divider()
+
+        if view_mode == "🌳 Baumansicht":
+            # Dokumente nach Kategorien gruppieren
+            for cat_id, cat_info in DOCUMENT_CATEGORIES.items():
+                cat_docs = [d for d in all_docs if d.get('category', 'aussergerichtlich') == cat_id]
+
+                if cat_docs:
+                    with st.expander(f"{cat_info['icon']} **{cat_info['name']}** ({len(cat_docs)} Dokumente)", expanded=(cat_id == 'aussergerichtlich')):
+                        for doc in sorted(cat_docs, key=lambda x: x['date'], reverse=True):
+                            show_document_item(doc, case_nr, f"exp_{case_id}_{cat_id}")
+
+        elif view_mode == "📋 Listenansicht":
+            # Alle Dokumente als Liste
+            for doc in sorted(all_docs, key=lambda x: x['name']):
+                cat_id = doc.get('category', 'aussergerichtlich')
+                cat_info = DOCUMENT_CATEGORIES.get(cat_id, DOCUMENT_CATEGORIES['aussergerichtlich'])
+                show_document_item(doc, case_nr, f"list_{case_id}", show_category=True)
+
+        else:  # Chronologisch
+            for doc in sorted(all_docs, key=lambda x: x['date'], reverse=True):
+                show_document_item(doc, case_nr, f"chron_{case_id}", show_category=True)
+
+    st.divider()
+
+    # Dokument hinzufügen
+    st.markdown("### ➕ Dokument hinzufügen")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        uploaded = st.file_uploader("Datei hochladen", type=['pdf', 'docx', 'jpg', 'png'], key=f"upload_{case_id}")
+
+    with col2:
+        if uploaded:
+            doc_type = st.selectbox(
+                "Dokumenttyp",
+                ["Rechnung", "Mahnung", "Vertrag", "Mahnbescheid", "Vollstreckungsbescheid",
+                 "Schreiben", "Notiz", "Sachstandsbericht", "Brief an Schuldner", "Sonstiges"],
+                key=f"doc_type_{case_id}"
+            )
+            doc_category = st.selectbox(
+                "Kategorie",
+                [(k, v['name']) for k, v in DOCUMENT_CATEGORIES.items()],
+                format_func=lambda x: x[1],
+                key=f"doc_cat_{case_id}"
+            )[0]
+
+    if uploaded:
+        if st.button("📤 Dokument hinzufügen", type="primary", use_container_width=True, key=f"add_doc_{case_id}"):
+            # Neues Dokument erstellen
+            new_doc = {
+                'id': f'doc-{case_id}-{datetime.now().strftime("%Y%m%d%H%M%S")}',
+                'name': uploaded.name,
+                'date': date.today(),
+                'type': doc_type,
+                'size': f'{len(uploaded.getvalue()) // 1024} KB',
+                'category': doc_category
+            }
+
+            # Zu DEMO_DOCUMENTS hinzufügen
+            if case_id not in DEMO_DOCUMENTS:
+                DEMO_DOCUMENTS[case_id] = []
+            DEMO_DOCUMENTS[case_id].append(new_doc)
+
+            st.success(f"✅ '{uploaded.name}' zur Akte hinzugefügt!")
+            st.rerun()
+
+def show_document_item(doc, case_nr, key_prefix, show_category=False):
+    """Zeigt ein einzelnes Dokument in kompakter Form"""
+    cat_id = doc.get('category', 'aussergerichtlich')
+    cat_info = DOCUMENT_CATEGORIES.get(cat_id, DOCUMENT_CATEGORIES['aussergerichtlich'])
+
+    col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+
+    with col1:
+        if show_category:
+            st.write(f"{cat_info['icon']} **{doc['name']}**")
+        else:
+            st.write(f"📄 **{doc['name']}**")
+        st.caption(f"{doc['type']} | {doc['size']}")
+
+    with col2:
+        st.write(fmt_date(doc['date']))
+
+    with col3:
+        # Prüfen ob echtes PDF vorhanden
+        has_real_pdf = st.session_state.pdf_viewer_content is not None
+
+        if has_real_pdf:
+            pdf_content = st.session_state.pdf_viewer_content
+        else:
+            pdf_content = generate_demo_pdf(doc['name'], case_nr)
+
+        st.download_button(
+            "⬇️",
+            data=pdf_content,
+            file_name=doc['name'],
+            mime="application/pdf" if doc['name'].endswith('.pdf') else "application/octet-stream",
+            key=f"{key_prefix}_dl_{doc['id']}",
+            help="Herunterladen"
+        )
+
+    with col4:
+        if st.button("👁️", key=f"{key_prefix}_view_{doc['id']}", help="Ansehen"):
+            st.session_state[f"viewing_{doc['id']}"] = True
+
+    # Vorschau anzeigen wenn aktiviert
+    if st.session_state.get(f"viewing_{doc['id']}", False):
+        has_real_pdf = st.session_state.pdf_viewer_content is not None
+        if has_real_pdf:
+            pdf_content = st.session_state.pdf_viewer_content
+        else:
+            pdf_content = generate_demo_pdf(doc['name'], case_nr)
+
+        with st.container():
+            st.divider()
+            if has_real_pdf and doc['name'].endswith('.pdf'):
+                pdf_base64 = base64.b64encode(pdf_content).decode('utf-8')
+                st.markdown(f'''
+                <iframe src="data:application/pdf;base64,{pdf_base64}" width="100%" height="400px"
+                    style="border: 1px solid #ccc; border-radius: 5px;"></iframe>
+                ''', unsafe_allow_html=True)
+            else:
+                st.text_area("Inhalt", value=pdf_content.decode('utf-8') if isinstance(pdf_content, bytes) else str(pdf_content),
+                    height=200, disabled=True, key=f"{key_prefix}_preview_{doc['id']}")
+
+            if st.button("❌ Schließen", key=f"{key_prefix}_close_{doc['id']}"):
+                st.session_state[f"viewing_{doc['id']}"] = False
+                st.rerun()
+
+    st.divider()
+
 # =============================================================================
 # RA-MICRO IMPORT FUNKTIONEN
 # =============================================================================
@@ -649,14 +897,45 @@ def parse_ra_micro_pdf(pdf_file):
         creditor = creditor_match.group(1).strip() if creditor_match else "Unbekannter Gläubiger"
         debtor = debtor_match.group(1).strip() if debtor_match else "Unbekannter Schuldner"
 
-        # Inhaltsverzeichnis parsen - Dokumente identifizieren
+        # Inhaltsverzeichnis parsen - Dokumente identifizieren mit Kategorien
         documents = []
+
+        # Erweiterte Dokumenttypen mit Kategorien
+        doc_type_categories = {
+            'rechnung': 'aussergerichtlich',
+            'mahnung': 'aussergerichtlich',
+            'forderungsaufstellung': 'aussergerichtlich',
+            'vertrag': 'aussergerichtlich',
+            'lieferschein': 'aussergerichtlich',
+            'mahnbescheid': 'gerichtlich',
+            'vollstreckungsbescheid': 'gerichtlich',
+            'pfüb': 'gerichtlich',
+            'klage': 'gerichtlich',
+            'urteil': 'gerichtlich',
+            'beschluss': 'gerichtlich',
+            'zustellung': 'gerichtlich',
+            'schreiben': 'aussergerichtlich',
+            'brief': 'aussergerichtlich',
+            'notiz': 'intern',
+            'vermerk': 'intern',
+            'aktennotiz': 'intern',
+            'sachstandsbericht': 'mandant',
+            'vollmacht': 'mandant',
+            'mandantenbrief': 'mandant',
+            'schuldnerbrief': 'schuldner',
+            'ratenzahlung': 'schuldner',
+            'vergleich': 'schuldner',
+        }
+
         toc_patterns = [
-            r'(\d+)\.\s+(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief|Forderungsaufstellung)[^\n]*(?:Seite\s*)?(\d+)?',
-            r'(Seite\s*)?(\d+)\s*[-–]\s*(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief)',
+            r'(\d+)\.\s+(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief|Forderungsaufstellung|Notiz|Vermerk|Sachstandsbericht|Vollmacht|Klage|PfÜB|Zustellung)[^\n]*(?:Seite\s*)?(\d+)?',
+            r'(Seite\s*)?(\d+)\s*[-–]\s*(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief|Klage)',
+            r'[-•]\s*(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Notiz|Vollmacht|Klage|PfÜB)',
         ]
 
         doc_id_counter = 1
+        found_types = set()
+
         for pattern in toc_patterns:
             for match in re.finditer(pattern, full_text, re.IGNORECASE):
                 groups = match.groups()
@@ -664,27 +943,40 @@ def parse_ra_micro_pdf(pdf_file):
                 page_num = 1
 
                 for g in groups:
-                    if g and g.lower() in ['rechnung', 'mahnung', 'mahnbescheid', 'vollstreckungsbescheid', 'vertrag', 'schreiben', 'brief', 'forderungsaufstellung']:
-                        doc_type = g.title()
-                    elif g and g.isdigit():
-                        page_num = int(g)
+                    if g:
+                        g_lower = g.lower().strip()
+                        if g_lower in doc_type_categories or any(t in g_lower for t in doc_type_categories.keys()):
+                            doc_type = g.title()
+                        elif g.isdigit():
+                            page_num = int(g)
 
-                if doc_type:
+                if doc_type and doc_type.lower() not in found_types:
+                    found_types.add(doc_type.lower())
+
+                    # Kategorie ermitteln
+                    category = 'aussergerichtlich'
+                    for key, cat in doc_type_categories.items():
+                        if key in doc_type.lower():
+                            category = cat
+                            break
+
                     documents.append({
                         'id': f'imp-doc-{doc_id_counter:03d}',
                         'name': f'{doc_type}_{doc_id_counter}.pdf',
                         'type': doc_type,
+                        'category': category,
                         'page': min(page_num, num_pages),
                         'date': date.today() - timedelta(days=doc_id_counter * 10),
-                        'size': f'{(num_pages // len(documents) + 1) * 50} KB' if documents else '100 KB'
+                        'size': f'{max(50, num_pages * 10)} KB'
                     })
                     doc_id_counter += 1
 
-        # Fallback: Wenn keine Dokumente gefunden, Standarddokumente erstellen
+        # Fallback: Wenn keine Dokumente gefunden, Standarddokumente mit Kategorien erstellen
         if not documents:
             documents = [
-                {'id': 'imp-doc-001', 'name': 'Forderungsaufstellung.pdf', 'type': 'Forderungsaufstellung', 'page': 1, 'date': date.today(), 'size': '150 KB'},
-                {'id': 'imp-doc-002', 'name': 'Originalrechnung.pdf', 'type': 'Rechnung', 'page': 2, 'date': date.today() - timedelta(30), 'size': '80 KB'},
+                {'id': 'imp-doc-001', 'name': 'Forderungsaufstellung.pdf', 'type': 'Forderungsaufstellung', 'category': 'aussergerichtlich', 'page': 1, 'date': date.today(), 'size': '150 KB'},
+                {'id': 'imp-doc-002', 'name': 'Originalrechnung.pdf', 'type': 'Rechnung', 'category': 'aussergerichtlich', 'page': 2, 'date': date.today() - timedelta(30), 'size': '80 KB'},
+                {'id': 'imp-doc-003', 'name': 'Gesamtakte_Import.pdf', 'type': 'Akte', 'category': 'intern', 'page': 1, 'date': date.today(), 'size': f'{num_pages * 50} KB'},
             ]
 
         # Forderungskonto extrahieren
@@ -869,13 +1161,26 @@ def show_ra_micro_import():
 
             st.divider()
 
-            # Erkannte Dokumente
+            # Erkannte Dokumente nach Kategorien
             st.markdown("#### 📄 Erkannte Dokumente")
+
+            # Dokumente nach Kategorie gruppieren
+            docs_by_cat = {}
             for doc in result['documents']:
-                c1, c2, c3 = st.columns([3, 2, 2])
-                c1.write(f"📄 {doc['name']}")
-                c2.write(doc['type'])
-                c3.write(f"Seite {doc['page']}")
+                cat = doc.get('category', 'aussergerichtlich')
+                if cat not in docs_by_cat:
+                    docs_by_cat[cat] = []
+                docs_by_cat[cat].append(doc)
+
+            for cat_id, cat_info in DOCUMENT_CATEGORIES.items():
+                cat_docs = docs_by_cat.get(cat_id, [])
+                if cat_docs:
+                    with st.expander(f"{cat_info['icon']} **{cat_info['name']}** ({len(cat_docs)} Dokumente)"):
+                        for doc in cat_docs:
+                            c1, c2, c3 = st.columns([3, 2, 2])
+                            c1.write(f"📄 {doc['name']}")
+                            c2.write(doc['type'])
+                            c3.write(f"Seite {doc['page']}")
 
             st.divider()
 
@@ -1167,32 +1472,66 @@ def show_lawyer_overview():
 def show_cases_list():
     st.markdown("## 📁 Aktenübersicht")
 
-    col1, col2 = st.columns(2)
+    # Anzahl importierter Akten anzeigen
+    imported_count = len(st.session_state.get('imported_cases', []))
+    if imported_count > 0:
+        st.success(f"📥 {imported_count} importierte Akte(n) vorhanden")
+
+    col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        filter_status = st.selectbox("Status", ["Alle", "Offen", "Mahnverfahren", "Vollstreckung"])
+        filter_status = st.selectbox("Status", ["Alle", "Offen", "Mahnverfahren", "Vollstreckung", "Importiert"])
     with col2:
         search = st.text_input("🔍 Suche", placeholder="Name, Aktenzeichen...")
+    with col3:
+        sort_by = st.selectbox("Sortieren", ["Aktenzeichen", "Schuldner", "Status"])
 
     st.divider()
 
-    cases = DEMO_CASES.copy()
-    if filter_status != "Alle":
+    # Alle Akten abrufen (inkl. importierter)
+    cases = get_all_cases()
+
+    # Filter anwenden
+    if filter_status == "Importiert":
+        cases = [c for c in cases if c.get('imported', False)]
+    elif filter_status != "Alle":
         cases = [c for c in cases if c['status'] == filter_status.lower()]
+
     if search:
-        cases = [c for c in cases if search.lower() in c['nr'].lower() or search.lower() in c['debtor'].lower()]
+        cases = [c for c in cases if search.lower() in c['nr'].lower() or search.lower() in c['debtor'].lower() or search.lower() in c['creditor'].lower()]
+
+    # Sortieren
+    if sort_by == "Schuldner":
+        cases.sort(key=lambda x: x['debtor'])
+    elif sort_by == "Status":
+        status_order = {'offen': 1, 'mahnverfahren': 2, 'vollstreckung': 3, 'abgeschlossen': 4}
+        cases.sort(key=lambda x: status_order.get(x['status'], 99))
+    else:
+        cases.sort(key=lambda x: x['nr'])
+
+    if not cases:
+        st.info("Keine Akten gefunden")
+        return
 
     for case in cases:
         s, h, o = get_balance(case['id'])
+        is_imported = case.get('imported', False)
+
         col1, col2, col3, col4, col5 = st.columns([1.5, 2.5, 2, 2, 1])
         with col1:
-            st.write(f"**{case['nr']}**")
+            import_badge = "📥 " if is_imported else ""
+            st.write(f"**{import_badge}{case['nr']}**")
+            if is_imported:
+                st.caption(f"Quelle: {case.get('source_pdf', 'Import')[:20]}...")
         with col2:
             st.write(case['debtor'])
             st.caption(case['creditor'])
         with col3:
-            st.write(case['status'].title())
+            status_icons = {'offen': '🟡', 'mahnverfahren': '🟠', 'vollstreckung': '🔴', 'abgeschlossen': '🟢'}
+            st.write(f"{status_icons.get(case['status'], '⚪')} {case['status'].title()}")
         with col4:
             st.write(fmt_curr(o))
+            if h > 0:
+                st.caption(f"Gezahlt: {fmt_curr(h)}")
         with col5:
             if st.button("📂", key=f"l_{case['id']}"):
                 st.session_state.selected_case = case['id']
@@ -1479,19 +1818,7 @@ def show_case_detail():
                 st.success("✅ Buchung gespeichert!")
 
     with tab3:
-        st.markdown("### 📄 Dokumente")
-        docs = DEMO_DOCUMENTS.get(case_id, [])
-        if docs:
-            for doc in docs:
-                show_document_viewer(doc, case['nr'], f"ra_{case_id}")
-        else:
-            st.info("Keine Dokumente vorhanden")
-
-        st.divider()
-        uploaded = st.file_uploader("Dokument hochladen", type=['pdf', 'docx', 'jpg'])
-        if uploaded:
-            if st.button("📤 Hochladen", type="primary"):
-                st.success(f"✅ '{uploaded.name}' hochgeladen!")
+        show_document_explorer(case_id, case['nr'])
 
     with tab4:
         st.markdown("### ⚖️ Mahnverfahren")
