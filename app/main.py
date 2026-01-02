@@ -56,6 +56,108 @@ if 'browser_notifications' not in st.session_state:
     st.session_state.browser_notifications = False
 if 'case_events' not in st.session_state:
     st.session_state.case_events = []  # Ereignisprotokoll
+# Vorlagen-System
+if 'templates' not in st.session_state:
+    st.session_state.templates = {
+        'briefkopf': """Kanzlei Müller & Partner
+Rechtsanwälte
+Musterstraße 123
+10115 Berlin
+
+Tel: +49 30 123456
+Fax: +49 30 123457
+E-Mail: info@kanzlei-mueller.de
+www.kanzlei-mueller.de
+
+Steuernummer: 12/345/67890
+USt-IdNr.: DE123456789""",
+        'email_signatur': """Mit freundlichen Grüßen
+
+Thomas Müller
+Rechtsanwalt
+
+Kanzlei Müller & Partner
+Musterstraße 123, 10115 Berlin
+Tel: +49 30 123456
+E-Mail: ra.mueller@kanzlei-mueller.de
+
+Diese E-Mail kann vertrauliche Informationen enthalten.""",
+        'zahlungsaufforderung': """[BRIEFKOPF]
+
+[DATUM]
+
+An
+[SCHULDNER_NAME]
+[SCHULDNER_ADRESSE]
+
+Unser Zeichen: [AKTENZEICHEN]
+
+Betreff: Zahlungsaufforderung - [BETREFF]
+
+Sehr geehrte/r [ANREDE],
+
+namens und in Vollmacht unserer Mandantschaft, [GLÄUBIGER], fordern wir Sie hiermit auf, den offenen Betrag in Höhe von
+
+[FORDERUNG_GESAMT]
+
+(Hauptforderung: [HAUPTFORDERUNG], zzgl. Zinsen und Kosten)
+
+bis spätestens zum [FRIST] auf das nachfolgende Konto zu überweisen:
+
+[BANKVERBINDUNG]
+
+Sollte die Zahlung nicht fristgerecht erfolgen, werden wir ohne weitere Ankündigung gerichtliche Schritte einleiten.
+
+[SIGNATUR]""",
+        'klage_vorlage': """[GERICHT]
+
+Klage
+
+des/der [KLÄGER]
+- Kläger/in -
+
+Prozessbevollmächtigte: [KANZLEI]
+
+gegen
+
+[BEKLAGTER]
+- Beklagte/r -
+
+wegen: Forderung
+
+Streitwert: [STREITWERT]
+
+[ANTRAG]
+
+[BEGRÜNDUNG]
+
+[BEWEISMITTEL]
+
+[SIGNATUR]""",
+        'schriftsatz_vorlage': """An das
+[GERICHT]
+
+In Sachen
+[KLÄGER] ./. [BEKLAGTER]
+Az.: [AKTENZEICHEN]
+
+wird namens und in Vollmacht des Klägers/der Klägerin wie folgt vorgetragen:
+
+[INHALT]
+
+[SIGNATUR]"""
+    }
+if 'kanzlei_daten' not in st.session_state:
+    st.session_state.kanzlei_daten = {
+        'name': 'Kanzlei Müller & Partner',
+        'adresse': 'Musterstraße 123\n10115 Berlin',
+        'telefon': '+49 30 123456',
+        'fax': '+49 30 123457',
+        'email': 'info@kanzlei-mueller.de',
+        'bank': 'Sparkasse Berlin',
+        'iban': 'DE89 3704 0044 0532 0130 00',
+        'bic': 'COBADEFFXXX'
+    }
 
 # =============================================================================
 # DEMO-DATEN
@@ -63,23 +165,44 @@ if 'case_events' not in st.session_state:
 DEMO_CASES = [
     {
         'id': 'case-001', 'nr': '1/25', 'creditor': 'Mustermann GmbH', 'debtor': 'Max Schmidt',
+        'creditor_address': 'Industriestraße 45\n10245 Berlin',
+        'debtor_address': 'Hauptstraße 12\n10115 Berlin',
         'subject': 'Offene Rechnung 2024-001', 'status': 'offen', 'dunning': 'nicht_beantragt',
         'enforcement': 'nicht_begonnen', 'principal': 5000.00, 'interest': 5.0,
         'due_date': date.today() - timedelta(days=60), 'created': datetime.now() - timedelta(days=65),
+        'contract_type': 'Kaufvertrag', 'contract_date': date.today() - timedelta(days=90),
+        'invoice_nr': '2024-001', 'invoice_date': date.today() - timedelta(days=60),
+        'leistung': 'Lieferung von Waren gemäß Bestellung vom 01.10.2024',
+        'mahnung_dates': [date.today() - timedelta(days=45), date.today() - timedelta(days=30)],
     },
     {
         'id': 'case-002', 'nr': '2/25', 'creditor': 'Mustermann GmbH', 'debtor': 'Hans Meier',
+        'creditor_address': 'Industriestraße 45\n10245 Berlin',
+        'debtor_address': 'Nebenstraße 34\n10178 Berlin',
         'subject': 'Kaufpreisforderung', 'status': 'mahnverfahren', 'dunning': 'mb_zugestellt',
         'enforcement': 'nicht_begonnen', 'principal': 2500.00, 'interest': 5.0,
         'due_date': date.today() - timedelta(days=90), 'created': datetime.now() - timedelta(days=95),
         'mb_date': date.today() - timedelta(days=30), 'mb_delivered': date.today() - timedelta(days=14),
+        'mb_az': '25-1234567-0-8', 'mb_gericht': 'AG Berlin-Wedding',
+        'contract_type': 'Kaufvertrag', 'contract_date': date.today() - timedelta(days=120),
+        'invoice_nr': '2024-002', 'invoice_date': date.today() - timedelta(days=90),
+        'leistung': 'Lieferung von Elektronikartikeln',
+        'widerspruch': False, 'einspruch': False, 'abgabe_streitgericht': False,
     },
     {
         'id': 'case-003', 'nr': '3/25', 'creditor': 'Mustermann GmbH', 'debtor': 'Anna Weber',
+        'creditor_address': 'Industriestraße 45\n10245 Berlin',
+        'debtor_address': 'Parkweg 56\n10999 Berlin',
         'subject': 'Mietrückstand', 'status': 'vollstreckung', 'dunning': 'titel_rechtskraeftig',
         'enforcement': 'pfueb_beantragt', 'principal': 3600.00, 'interest': 5.0,
         'due_date': date.today() - timedelta(days=180), 'created': datetime.now() - timedelta(days=185),
         'vb_date': date.today() - timedelta(days=60),
+        'mb_az': '25-9876543-0-2', 'mb_gericht': 'AG Berlin-Wedding',
+        'vb_az': '25-9876543-0-2', 'contract_type': 'Mietvertrag',
+        'contract_date': date.today() - timedelta(days=365),
+        'leistung': 'Überlassung der Mieträume gemäß Mietvertrag',
+        'widerspruch': True, 'einspruch': False, 'abgabe_streitgericht': True,
+        'streitgericht': 'AG Berlin-Mitte', 'streit_az': '12 C 456/24',
     },
 ]
 
@@ -925,6 +1048,9 @@ def lawyer_dashboard():
         if st.button("⚖️ Mahnverfahren", use_container_width=True):
             st.session_state.page = 'dunning'
             st.rerun()
+        if st.button("📜 Klage-Entwurf", use_container_width=True):
+            st.session_state.page = 'klage'
+            st.rerun()
         if st.button("🔨 Vollstreckung", use_container_width=True):
             st.session_state.page = 'enforcement'
             st.rerun()
@@ -932,6 +1058,9 @@ def lawyer_dashboard():
             st.session_state.page = 'limitation'
             st.rerun()
         st.divider()
+        if st.button("📋 Vorlagen", use_container_width=True):
+            st.session_state.page = 'templates'
+            st.rerun()
 
         # Einstellungen
         if st.button("⚙️ Einstellungen", use_container_width=True):
@@ -951,6 +1080,8 @@ def lawyer_dashboard():
     elif page == 'settings': show_settings()
     elif page == 'ra_micro_import': show_ra_micro_import()
     elif page == 'dunning': show_dunning()
+    elif page == 'klage': show_klage_entwurf()
+    elif page == 'templates': show_vorlagen()
     elif page == 'enforcement': show_enforcement()
     elif page == 'limitation': show_limitation()
     else: show_lawyer_overview()
@@ -1900,6 +2031,686 @@ def show_limitation():
         else:
             c4.success(f"✅ {days} Tage")
         st.divider()
+
+# =============================================================================
+# KLAGE-ENTWURF SYSTEM
+# =============================================================================
+def get_zustaendiges_gericht(case):
+    """
+    Ermittelt das zuständige Gericht nach ZPO.
+    Sachliche Zuständigkeit: Streitwert > 5000€ = Landgericht, sonst Amtsgericht
+    Örtliche Zuständigkeit: Wohnsitz des Beklagten (allgemeiner Gerichtsstand)
+    """
+    streitwert = case['principal']
+    debtor_address = case.get('debtor_address', '')
+
+    # Sachliche Zuständigkeit
+    if streitwert > 5000:
+        gericht_art = "Landgericht"
+    else:
+        gericht_art = "Amtsgericht"
+
+    # Örtliche Zuständigkeit aus Adresse ableiten
+    if 'Berlin' in debtor_address:
+        if gericht_art == "Landgericht":
+            gericht = "Landgericht Berlin"
+        else:
+            # Bezirk aus PLZ ermitteln
+            if '10115' in debtor_address or '10178' in debtor_address:
+                gericht = "Amtsgericht Berlin-Mitte"
+            elif '10245' in debtor_address:
+                gericht = "Amtsgericht Berlin-Kreuzberg"
+            elif '10999' in debtor_address:
+                gericht = "Amtsgericht Berlin-Kreuzberg"
+            else:
+                gericht = "Amtsgericht Berlin-Mitte"
+    else:
+        gericht = f"{gericht_art} [Ort einsetzen]"
+
+    return {
+        'art': gericht_art,
+        'name': gericht,
+        'streitwert': streitwert,
+        'ist_landgericht': streitwert > 5000
+    }
+
+def generate_klage_entwurf(case, use_ai=False):
+    """
+    Generiert einen vollständigen Klage-Entwurf nach ZPO.
+    """
+    s, h, o = get_balance(case['id'])
+    gericht_info = get_zustaendiges_gericht(case)
+    kanzlei = st.session_state.kanzlei_daten
+
+    # Prüfen ob Mahnverfahren durchgeführt wurde
+    hat_mahnverfahren = case.get('mb_az') is not None
+    hat_widerspruch = case.get('widerspruch', False)
+    hat_einspruch = case.get('einspruch', False)
+    abgabe_erfolgt = case.get('abgabe_streitgericht', False)
+
+    # Zahlungen ermitteln
+    bookings = DEMO_BOOKINGS.get(case['id'], [])
+    zahlungen = [b for b in bookings if b['type'] == 'H']
+
+    # Gericht und Rubrum bestimmen
+    if hat_mahnverfahren and not abgabe_erfolgt:
+        # Noch beim Mahngericht - Abgabeantrag
+        gericht_header = f"""An das
+{case.get('mb_gericht', 'Amtsgericht [Mahngericht]')}
+- Mahnabteilung -
+
+Geschäftszeichen: {case.get('mb_az', '[Aktenzeichen Mahnverfahren]')}
+
+In dem Mahnverfahren
+
+{case['creditor']}
+{case.get('creditor_address', '[Adresse Gläubiger]')}
+- Antragsteller/Kläger -
+
+Prozessbevollmächtigte: {kanzlei['name']}, {kanzlei['adresse'].replace(chr(10), ', ')}
+
+gegen
+
+{case['debtor']}
+{case.get('debtor_address', '[Adresse Schuldner]')}
+- Antragsgegner/Beklagter -
+
+wird aufgrund des {'Widerspruchs gegen den Mahnbescheid' if hat_widerspruch else 'Einspruchs gegen den Vollstreckungsbescheid' if hat_einspruch else 'gerichtlichen Mahnverfahrens'} die
+
+**Abgabe an das zuständige Streitgericht**
+
+beantragt.
+
+Zuständiges Streitgericht: {gericht_info['name']}
+
+---
+
+"""
+    else:
+        gericht_header = ""
+
+    # Hauptteil der Klage
+    if abgabe_erfolgt:
+        streitgericht = case.get('streitgericht', gericht_info['name'])
+        streit_az = case.get('streit_az', '[Aktenzeichen Streitgericht]')
+        klage_header = f"""An das
+{streitgericht}
+
+Geschäftszeichen: {streit_az}
+
+"""
+    else:
+        klage_header = f"""An das
+{gericht_info['name']}
+
+"""
+
+    # Rubrum
+    rubrum = f"""
+K L A G E
+
+des/der {case['creditor']}
+{case.get('creditor_address', '[Adresse Gläubiger]')}
+- Kläger/in -
+
+Prozessbevollmächtigte: {kanzlei['name']}
+{kanzlei['adresse']}
+Tel: {kanzlei['telefon']}, Fax: {kanzlei['fax']}
+
+gegen
+
+{case['debtor']}
+{case.get('debtor_address', '[Adresse Schuldner]')}
+- Beklagte/r -
+
+wegen: Forderung aus {case.get('contract_type', 'Vertrag')}
+
+**Streitwert: {fmt_curr(case['principal'])}**
+(Gegenstandswert: Hauptforderung ohne Zinsen)
+
+"""
+
+    # Antrag
+    due_date_str = fmt_date(case['due_date'])
+    antrag = f"""
+I. ANTRAG
+
+Es wird beantragt,
+
+den Beklagten/die Beklagte zu verurteilen, an den Kläger/die Klägerin
+
+**{fmt_curr(case['principal'])}**
+(in Worten: {betrag_in_worten(case['principal'])})
+
+zuzüglich Zinsen in Höhe von 5 Prozentpunkten über dem jeweiligen Basiszinssatz der EZB seit dem {due_date_str} zu zahlen.
+
+"""
+
+    # Zusätzlich vorgerichtliche Kosten wenn vorhanden
+    ra_kosten = sum(b['amount'] for b in bookings if b['cat'] == 'RA-Gebühren')
+    if ra_kosten > 0:
+        antrag += f"""
+Ferner wird beantragt, den Beklagten/die Beklagte zu verurteilen, an den Kläger/die Klägerin vorgerichtliche Rechtsanwaltskosten in Höhe von {fmt_curr(ra_kosten)} nebst Zinsen in Höhe von 5 Prozentpunkten über dem jeweiligen Basiszinssatz seit Rechtshängigkeit zu zahlen.
+
+"""
+
+    # Begründung
+    begruendung = f"""
+II. BEGRÜNDUNG
+
+1. Sachverhalt
+
+Die Parteien schlossen am {fmt_date(case.get('contract_date', case['due_date']))} einen {case.get('contract_type', 'Vertrag')}.
+
+**Beweis:** {case.get('contract_type', 'Vertrag')} vom {fmt_date(case.get('contract_date', case['due_date']))} (Anlage K1)
+
+Der Kläger/Die Klägerin hat die vertraglich geschuldete Leistung vollständig erbracht:
+{case.get('leistung', 'Die Leistung wurde ordnungsgemäß erbracht.')}
+
+**Beweis:** Lieferschein/Leistungsnachweis (Anlage K2)
+
+Für die erbrachte Leistung stellte der Kläger/die Klägerin am {fmt_date(case.get('invoice_date', case['due_date']))} die Rechnung Nr. {case.get('invoice_nr', '[Rechnungsnummer]')} über einen Betrag von {fmt_curr(case['principal'])}.
+
+**Beweis:** Rechnung Nr. {case.get('invoice_nr', '[Rechnungsnummer]')} (Anlage K3)
+
+Die Forderung war am {due_date_str} zur Zahlung fällig.
+
+"""
+
+    # Außergerichtliche Mahnungen
+    mahnung_dates = case.get('mahnung_dates', [])
+    if mahnung_dates:
+        begruendung += f"""
+2. Außergerichtliche Beitreibung
+
+Der Beklagte/Die Beklagte wurde außergerichtlich zur Zahlung aufgefordert:
+"""
+        for i, md in enumerate(mahnung_dates, 1):
+            begruendung += f"""
+- {i}. Mahnung vom {fmt_date(md)}
+"""
+        begruendung += """
+**Beweis:** Mahnschreiben (Anlagen K4 ff.)
+
+Trotz dieser Aufforderungen blieb die Zahlung aus.
+
+"""
+
+    # Mahnverfahren
+    if hat_mahnverfahren:
+        begruendung += f"""
+3. Gerichtliches Mahnverfahren
+
+Der Kläger/Die Klägerin hat am {fmt_date(case.get('mb_date', date.today()))} beim {case.get('mb_gericht', 'zuständigen Mahngericht')} einen Mahnbescheid beantragt.
+
+Aktenzeichen Mahnverfahren: {case.get('mb_az', '[Aktenzeichen]')}
+
+"""
+        if case.get('mb_delivered'):
+            begruendung += f"""Der Mahnbescheid wurde dem Beklagten/der Beklagten am {fmt_date(case.get('mb_delivered'))} zugestellt.
+
+"""
+        if hat_widerspruch:
+            begruendung += """Der Beklagte/Die Beklagte hat gegen den Mahnbescheid Widerspruch eingelegt.
+
+"""
+        if hat_einspruch:
+            begruendung += """Der Beklagte/Die Beklagte hat gegen den Vollstreckungsbescheid Einspruch eingelegt.
+
+"""
+        if case.get('vb_date'):
+            begruendung += f"""Am {fmt_date(case.get('vb_date'))} wurde der Vollstreckungsbescheid erlassen.
+
+"""
+
+    # Zahlungen
+    if zahlungen:
+        begruendung += f"""
+4. Zahlungen
+
+Folgende Zahlungen sind eingegangen:
+"""
+        for z in zahlungen:
+            begruendung += f"""
+- {fmt_date(z['date'])}: {fmt_curr(z['amount'])} ({z['desc']})
+"""
+        begruendung += f"""
+Diese Zahlungen wurden auf die Forderung verrechnet. Es verbleibt ein offener Betrag von {fmt_curr(o)}.
+
+"""
+
+    # Anspruchsgrundlage
+    begruendung += f"""
+5. Rechtliche Würdigung / Anspruchsgrundlage
+
+Der Kläger/Die Klägerin hat gegen den Beklagten/die Beklagte einen Anspruch auf Zahlung von {fmt_curr(case['principal'])} aus dem {case.get('contract_type', 'Vertrag')} vom {fmt_date(case.get('contract_date', case['due_date']))}.
+
+Die Anspruchsgrundlage ergibt sich aus:
+- § 433 Abs. 2 BGB (Kaufpreisanspruch) bei Kaufverträgen
+- § 535 Abs. 2 BGB (Mietzinsanspruch) bei Mietverträgen
+- § 631 Abs. 1 BGB (Vergütungsanspruch) bei Werkverträgen
+
+Der Vertrag zwischen den Parteien ist wirksam zustande gekommen. Der Kläger/Die Klägerin hat die geschuldete Leistung vollständig und ordnungsgemäß erbracht. Der Beklagte/Die Beklagte ist daher zur Zahlung des vereinbarten Entgelts verpflichtet.
+
+Der Zinsanspruch ergibt sich aus §§ 286, 288 BGB. Mit Fälligkeit am {due_date_str} befand sich der Beklagte/die Beklagte in Verzug.
+
+"""
+
+    # Beweismittel
+    beweismittel = """
+III. BEWEISMITTEL
+
+Zum Beweis des klägerischen Vortrags werden folgende Beweismittel angeboten:
+
+1. Anlage K1 - Vertrag vom [Datum]
+2. Anlage K2 - Leistungsnachweis/Lieferschein
+3. Anlage K3 - Rechnung
+4. Anlage K4 ff. - Mahnschreiben
+"""
+    if hat_mahnverfahren:
+        beweismittel += """5. Mahnbescheid/Vollstreckungsbescheid
+"""
+
+    beweismittel += """
+Zeugenbeweis: [Falls Zeugen vorhanden]
+
+Sachverständigenbeweis: [Falls erforderlich]
+
+Parteivernehmung des Klägers/der Klägerin
+
+"""
+
+    # Unterschrift
+    unterschrift = f"""
+{kanzlei['adresse'].split(chr(10))[1] if chr(10) in kanzlei['adresse'] else 'Berlin'}, den {fmt_date(date.today())}
+
+{kanzlei['name']}
+
+_______________________
+Rechtsanwalt/Rechtsanwältin
+"""
+
+    # Zusammenfügen
+    klage = gericht_header + klage_header + rubrum + antrag + begruendung + beweismittel + unterschrift
+
+    return klage
+
+def betrag_in_worten(betrag):
+    """Wandelt einen Betrag in Worte um (vereinfacht)"""
+    euro = int(betrag)
+    cent = int((betrag - euro) * 100)
+
+    einer = ['', 'ein', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun']
+    zehner = ['', 'zehn', 'zwanzig', 'dreißig', 'vierzig', 'fünfzig', 'sechzig', 'siebzig', 'achtzig', 'neunzig']
+
+    if euro < 10:
+        euro_wort = einer[euro]
+    elif euro < 20:
+        euro_wort = ['zehn', 'elf', 'zwölf', 'dreizehn', 'vierzehn', 'fünfzehn', 'sechzehn', 'siebzehn', 'achtzehn', 'neunzehn'][euro-10]
+    elif euro < 100:
+        euro_wort = einer[euro % 10] + ('und' if euro % 10 > 0 else '') + zehner[euro // 10]
+    elif euro < 1000:
+        rest = euro % 100
+        if rest == 0:
+            euro_wort = einer[euro // 100] + 'hundert'
+        elif rest < 10:
+            euro_wort = einer[euro // 100] + 'hundert' + einer[rest]
+        elif rest < 20:
+            euro_wort = einer[euro // 100] + 'hundert' + ['zehn', 'elf', 'zwölf', 'dreizehn', 'vierzehn', 'fünfzehn', 'sechzehn', 'siebzehn', 'achtzehn', 'neunzehn'][rest-10]
+        else:
+            euro_wort = einer[euro // 100] + 'hundert' + einer[rest % 10] + ('und' if rest % 10 > 0 else '') + zehner[rest // 10]
+    else:
+        tausend = euro // 1000
+        rest = euro % 1000
+        if tausend == 1:
+            euro_wort = 'eintausend'
+        else:
+            euro_wort = einer[tausend] + 'tausend'
+        if rest > 0:
+            if rest < 100:
+                euro_wort += betrag_in_worten(rest).replace(' Euro', '')
+            else:
+                euro_wort += einer[rest // 100] + 'hundert'
+                if rest % 100 > 0:
+                    euro_wort += betrag_in_worten(rest % 100).replace(' Euro', '')
+
+    return f"{euro_wort} Euro" + (f" und {cent} Cent" if cent > 0 else "")
+
+def generate_klage_with_ai(case, klage_entwurf):
+    """Verbessert den Klage-Entwurf mit KI"""
+    if not st.session_state.openai_api_key:
+        return klage_entwurf
+
+    try:
+        import openai
+        client = openai.OpenAI(api_key=st.session_state.openai_api_key)
+
+        prompt = f"""Du bist ein erfahrener Rechtsanwalt für Zivilrecht.
+Bitte überarbeite und verbessere den folgenden Klage-Entwurf:
+- Verbessere die juristische Sprache
+- Stelle sicher, dass alle formalen Anforderungen der ZPO erfüllt sind
+- Ergänze wo sinnvoll rechtliche Ausführungen
+- Behalte alle faktischen Angaben bei
+
+Klage-Entwurf:
+{klage_entwurf}
+
+Bitte gib den verbesserten Klage-Entwurf zurück."""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4000
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        st.warning(f"KI-Verbesserung fehlgeschlagen: {str(e)}")
+        return klage_entwurf
+
+def show_klage_entwurf():
+    """Hauptseite für Klage-Entwurf"""
+    st.markdown("## 📜 Klage-Entwurf")
+
+    st.info("""
+    **Klage-Entwurf nach ZPO**
+
+    Dieses Tool erstellt einen vollständigen Klage-Entwurf basierend auf den Aktendaten:
+    - Automatische Bestimmung der sachlichen und örtlichen Zuständigkeit
+    - Berücksichtigung von Mahnverfahren (Widerspruch/Einspruch)
+    - Integration aller Zahlungen und Kosten
+    - ZPO-konforme Struktur mit Antrag, Begründung und Beweismitteln
+    """)
+
+    st.divider()
+
+    # Akte auswählen
+    case_options = [f"{c['nr']} - {c['debtor']} ({fmt_curr(c['principal'])})" for c in DEMO_CASES]
+    selected_case_str = st.selectbox("📁 Akte auswählen", case_options)
+
+    case_nr = selected_case_str.split(" - ")[0]
+    case = next((c for c in DEMO_CASES if c['nr'] == case_nr), None)
+
+    if not case:
+        st.error("Akte nicht gefunden")
+        return
+
+    # Akten-Info anzeigen
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("### Kläger (Gläubiger)")
+        st.write(f"**{case['creditor']}**")
+        st.caption(case.get('creditor_address', 'Keine Adresse'))
+    with col2:
+        st.markdown("### Beklagter (Schuldner)")
+        st.write(f"**{case['debtor']}**")
+        st.caption(case.get('debtor_address', 'Keine Adresse'))
+    with col3:
+        s, h, o = get_balance(case['id'])
+        st.markdown("### Forderung")
+        st.metric("Streitwert", fmt_curr(case['principal']))
+        st.caption(f"Offen: {fmt_curr(o)}")
+
+    st.divider()
+
+    # Gerichtszuständigkeit
+    gericht_info = get_zustaendiges_gericht(case)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### ⚖️ Sachliche Zuständigkeit")
+        if gericht_info['ist_landgericht']:
+            st.warning(f"**{gericht_info['art']}** (Streitwert > 5.000 €)")
+        else:
+            st.success(f"**{gericht_info['art']}** (Streitwert ≤ 5.000 €)")
+    with col2:
+        st.markdown("### 📍 Örtliche Zuständigkeit")
+        st.info(f"**{gericht_info['name']}**")
+        st.caption("(Allgemeiner Gerichtsstand: Wohnsitz des Beklagten)")
+
+    # Mahnverfahren-Status
+    if case.get('mb_az'):
+        st.divider()
+        st.markdown("### ⚖️ Mahnverfahren")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.write(f"**Mahngericht:** {case.get('mb_gericht', '-')}")
+            st.write(f"**Az.:** {case.get('mb_az', '-')}")
+        with col2:
+            st.write(f"**MB zugestellt:** {fmt_date(case.get('mb_delivered'))}")
+            st.write(f"**Widerspruch:** {'Ja' if case.get('widerspruch') else 'Nein'}")
+        with col3:
+            st.write(f"**VB erlassen:** {fmt_date(case.get('vb_date'))}")
+            st.write(f"**Abgabe erfolgt:** {'Ja' if case.get('abgabe_streitgericht') else 'Nein'}")
+
+    st.divider()
+
+    # Optionen
+    st.markdown("### ⚙️ Optionen")
+    col1, col2 = st.columns(2)
+    with col1:
+        use_ai = st.checkbox("🤖 KI-Optimierung verwenden", value=bool(st.session_state.openai_api_key))
+        if use_ai and not st.session_state.openai_api_key:
+            st.warning("Bitte API-Schlüssel in Einstellungen hinterlegen")
+    with col2:
+        include_costs = st.checkbox("💶 Vorgerichtliche Kosten einbeziehen", value=True)
+
+    st.divider()
+
+    # Klage generieren
+    if st.button("📜 Klage-Entwurf erstellen", type="primary", use_container_width=True):
+        with st.spinner("Klage wird erstellt..."):
+            klage = generate_klage_entwurf(case)
+
+            if use_ai and st.session_state.openai_api_key:
+                with st.spinner("KI optimiert den Entwurf..."):
+                    klage = generate_klage_with_ai(case, klage)
+
+            st.session_state.current_klage = klage
+            st.session_state.current_klage_case = case['id']
+
+    # Klage anzeigen
+    if 'current_klage' in st.session_state and st.session_state.get('current_klage_case') == case['id']:
+        st.divider()
+        st.markdown("### 📄 Klage-Entwurf")
+
+        # Bearbeitbares Textfeld
+        edited_klage = st.text_area(
+            "Klage (bearbeitbar)",
+            value=st.session_state.current_klage,
+            height=600,
+            key="klage_editor"
+        )
+
+        st.divider()
+
+        # Aktionen
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.download_button(
+                "📄 Als Word/TXT",
+                data=edited_klage.encode('utf-8'),
+                file_name=f"Klage_{case['nr'].replace('/', '-')}_{date.today().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+
+        with col2:
+            if st.button("📋 In Zwischenablage", use_container_width=True):
+                st.code(edited_klage[:500] + "...", language=None)
+                st.success("Text kopiert!")
+
+        with col3:
+            if st.button("📁 Zur Akte speichern", use_container_width=True):
+                # Dokument zur Akte hinzufügen
+                new_doc = {
+                    'id': f'klage-{case["id"]}-{date.today().strftime("%Y%m%d")}',
+                    'name': f'Klage_{case["nr"].replace("/", "-")}_{date.today().strftime("%Y%m%d")}.pdf',
+                    'date': date.today(),
+                    'type': 'Klage',
+                    'size': f'{len(edited_klage) // 100} KB'
+                }
+                if case['id'] not in DEMO_DOCUMENTS:
+                    DEMO_DOCUMENTS[case['id']] = []
+                DEMO_DOCUMENTS[case['id']].append(new_doc)
+                st.success("✅ Klage zur Akte hinzugefügt!")
+
+        with col4:
+            if st.button("🤖 Mit KI verbessern", use_container_width=True):
+                if st.session_state.openai_api_key:
+                    with st.spinner("KI optimiert..."):
+                        st.session_state.current_klage = generate_klage_with_ai(case, edited_klage)
+                        st.rerun()
+                else:
+                    st.error("Bitte API-Schlüssel in Einstellungen hinterlegen")
+
+def show_vorlagen():
+    """Vorlagen-Verwaltung"""
+    st.markdown("## 📋 Vorlagen-Verwaltung")
+
+    st.info("""
+    **Vorlagen für Schriftsätze und Dokumente**
+
+    Erstellen und verwalten Sie Vorlagen für:
+    - Briefkopf und Kanzleidaten
+    - E-Mail-Signatur
+    - Zahlungsaufforderungen
+    - Klagen
+    - Schriftsätze
+
+    Die Vorlagen können mit KI automatisch in fertige Dokumente umgewandelt werden.
+    """)
+
+    st.divider()
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📝 Briefkopf & Signatur", "📬 Schreiben", "⚖️ Klagen & Schriftsätze", "🏢 Kanzleidaten"])
+
+    with tab1:
+        st.markdown("### Briefkopf")
+        briefkopf = st.text_area(
+            "Briefkopf-Vorlage",
+            value=st.session_state.templates.get('briefkopf', ''),
+            height=200,
+            key="tpl_briefkopf"
+        )
+        if st.button("💾 Briefkopf speichern", key="save_briefkopf"):
+            st.session_state.templates['briefkopf'] = briefkopf
+            st.success("✅ Gespeichert!")
+
+        st.divider()
+
+        st.markdown("### E-Mail-Signatur")
+        email_sig = st.text_area(
+            "E-Mail-Signatur",
+            value=st.session_state.templates.get('email_signatur', ''),
+            height=150,
+            key="tpl_email"
+        )
+        if st.button("💾 Signatur speichern", key="save_email"):
+            st.session_state.templates['email_signatur'] = email_sig
+            st.success("✅ Gespeichert!")
+
+    with tab2:
+        st.markdown("### Zahlungsaufforderung")
+        st.caption("Platzhalter: [BRIEFKOPF], [DATUM], [SCHULDNER_NAME], [GLÄUBIGER], [FORDERUNG_GESAMT], etc.")
+
+        zahlungsauff = st.text_area(
+            "Vorlage Zahlungsaufforderung",
+            value=st.session_state.templates.get('zahlungsaufforderung', ''),
+            height=400,
+            key="tpl_zahlung"
+        )
+        if st.button("💾 Vorlage speichern", key="save_zahlung"):
+            st.session_state.templates['zahlungsaufforderung'] = zahlungsauff
+            st.success("✅ Gespeichert!")
+
+        st.divider()
+
+        # Test mit Akte
+        st.markdown("### 🧪 Vorlage testen")
+        case_options = [f"{c['nr']} - {c['debtor']}" for c in DEMO_CASES]
+        test_case_str = st.selectbox("Akte für Test", case_options, key="test_case")
+
+        if st.button("📄 Dokument generieren", key="gen_zahlung"):
+            case_nr = test_case_str.split(" - ")[0]
+            case = next((c for c in DEMO_CASES if c['nr'] == case_nr), None)
+            if case:
+                s, h, o = get_balance(case['id'])
+                doc = zahlungsauff
+                doc = doc.replace('[BRIEFKOPF]', st.session_state.templates.get('briefkopf', ''))
+                doc = doc.replace('[DATUM]', fmt_date(date.today()))
+                doc = doc.replace('[SCHULDNER_NAME]', case['debtor'])
+                doc = doc.replace('[SCHULDNER_ADRESSE]', case.get('debtor_address', ''))
+                doc = doc.replace('[AKTENZEICHEN]', case['nr'])
+                doc = doc.replace('[BETREFF]', case['subject'])
+                doc = doc.replace('[GLÄUBIGER]', case['creditor'])
+                doc = doc.replace('[FORDERUNG_GESAMT]', fmt_curr(o))
+                doc = doc.replace('[HAUPTFORDERUNG]', fmt_curr(case['principal']))
+                doc = doc.replace('[SIGNATUR]', st.session_state.templates.get('email_signatur', ''))
+                doc = doc.replace('[BANKVERBINDUNG]', f"{st.session_state.kanzlei_daten['bank']}\nIBAN: {st.session_state.kanzlei_daten['iban']}")
+                doc = doc.replace('[FRIST]', fmt_date(date.today() + timedelta(days=14)))
+                doc = doc.replace('[ANREDE]', 'Frau' if case['debtor'].split()[0] in ['Anna', 'Maria', 'Lisa'] else 'Herr')
+
+                st.text_area("Generiertes Dokument", value=doc, height=400)
+                st.download_button(
+                    "⬇️ Herunterladen",
+                    data=doc.encode('utf-8'),
+                    file_name=f"Zahlungsaufforderung_{case['nr'].replace('/', '-')}.txt",
+                    mime="text/plain"
+                )
+
+    with tab3:
+        st.markdown("### Klage-Vorlage")
+        klage_vorlage = st.text_area(
+            "Vorlage für Klagen",
+            value=st.session_state.templates.get('klage_vorlage', ''),
+            height=300,
+            key="tpl_klage"
+        )
+        if st.button("💾 Klage-Vorlage speichern", key="save_klage"):
+            st.session_state.templates['klage_vorlage'] = klage_vorlage
+            st.success("✅ Gespeichert!")
+
+        st.divider()
+
+        st.markdown("### Schriftsatz-Vorlage")
+        schriftsatz = st.text_area(
+            "Vorlage für Schriftsätze",
+            value=st.session_state.templates.get('schriftsatz_vorlage', ''),
+            height=200,
+            key="tpl_schrift"
+        )
+        if st.button("💾 Schriftsatz-Vorlage speichern", key="save_schrift"):
+            st.session_state.templates['schriftsatz_vorlage'] = schriftsatz
+            st.success("✅ Gespeichert!")
+
+    with tab4:
+        st.markdown("### 🏢 Kanzleidaten")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            kanzlei_name = st.text_input("Kanzleiname", value=st.session_state.kanzlei_daten.get('name', ''))
+            kanzlei_adresse = st.text_area("Adresse", value=st.session_state.kanzlei_daten.get('adresse', ''), height=100)
+            kanzlei_telefon = st.text_input("Telefon", value=st.session_state.kanzlei_daten.get('telefon', ''))
+            kanzlei_fax = st.text_input("Fax", value=st.session_state.kanzlei_daten.get('fax', ''))
+        with col2:
+            kanzlei_email = st.text_input("E-Mail", value=st.session_state.kanzlei_daten.get('email', ''))
+            kanzlei_bank = st.text_input("Bank", value=st.session_state.kanzlei_daten.get('bank', ''))
+            kanzlei_iban = st.text_input("IBAN", value=st.session_state.kanzlei_daten.get('iban', ''))
+            kanzlei_bic = st.text_input("BIC", value=st.session_state.kanzlei_daten.get('bic', ''))
+
+        if st.button("💾 Kanzleidaten speichern", type="primary"):
+            st.session_state.kanzlei_daten = {
+                'name': kanzlei_name,
+                'adresse': kanzlei_adresse,
+                'telefon': kanzlei_telefon,
+                'fax': kanzlei_fax,
+                'email': kanzlei_email,
+                'bank': kanzlei_bank,
+                'iban': kanzlei_iban,
+                'bic': kanzlei_bic
+            }
+            st.success("✅ Kanzleidaten gespeichert!")
 
 # =============================================================================
 # GLÄUBIGER DASHBOARD
