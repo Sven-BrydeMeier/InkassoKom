@@ -891,15 +891,72 @@ def parse_ra_micro_pdf(pdf_file):
         az_match = re.search(az_pattern, full_text, re.IGNORECASE)
         aktenzeichen = az_match.group(1) if az_match else f"IMP/{datetime.now().strftime('%y')}"
 
-        # Parteien extrahieren
-        creditor_pattern = r'(?:Gläubiger|Mandant|Auftraggeber)[:\s]*([A-Za-zäöüÄÖÜß\s\-\.]+(?:GmbH|AG|e\.K\.|KG|OHG)?)'
-        debtor_pattern = r'(?:Schuldner|Gegner|Beklagter)[:\s]*([A-Za-zäöüÄÖÜß\s\-\.]+)'
+        # Parteien extrahieren - verbesserte Erkennung für Aktenvorblatt
+        # Mandant = Gläubiger (unser Auftraggeber)
+        # Gegner = Schuldner (die beklagte Partei)
 
-        creditor_match = re.search(creditor_pattern, full_text, re.IGNORECASE)
-        debtor_match = re.search(debtor_pattern, full_text, re.IGNORECASE)
+        # Verschiedene Muster für Mandant/Gläubiger
+        creditor_patterns = [
+            # Aktenvorblatt-Format: "Mandant: Name" oder "Mandant\nName"
+            r'(?:Mandant(?:in)?|Mandantschaft)[:\s\n]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?)(?:\n|$|Gegner|Schuldner|Aktenzeichen)',
+            # Standard: "Gläubiger: Name GmbH"
+            r'(?:Gläubiger(?:in)?|Auftraggeber(?:in)?)[:\s]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?(?:GmbH|AG|e\.K\.|KG|OHG|UG|mbH)?)',
+            # Format mit "wegen ... gegen"
+            r'(?:namens|in Vollmacht|für)[^\n]*?(?:der|des|die)\s+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.]+?(?:GmbH|AG|e\.K\.|KG|OHG|UG|mbH)?)',
+        ]
 
-        creditor = creditor_match.group(1).strip() if creditor_match else "Unbekannter Gläubiger"
-        debtor = debtor_match.group(1).strip() if debtor_match else "Unbekannter Schuldner"
+        # Verschiedene Muster für Gegner/Schuldner
+        debtor_patterns = [
+            # Aktenvorblatt-Format: "Gegner: Name" oder "Gegner\nName"
+            r'(?:Gegner(?:in)?|Antragsgegner(?:in)?)[:\s\n]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?)(?:\n|$|Mandant|Gläubiger|Aktenzeichen|geboren)',
+            # Standard: "Schuldner: Max Mustermann"
+            r'(?:Schuldner(?:in)?|Beklagte[r]?)[:\s]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9,]+?)(?:\n|$|geboren|wohnhaft)',
+            # Format: "gegen [Name]"
+            r'(?:\sgegen\s)([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.]+?)(?:\n|,|$|wegen|geboren)',
+        ]
+
+        creditor = "Unbekannter Gläubiger"
+        debtor = "Unbekannter Schuldner"
+        creditor_address = ""
+        debtor_address = ""
+
+        # Gläubiger/Mandant finden
+        for pattern in creditor_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                creditor = match.group(1).strip()
+                # Bereinigen
+                creditor = re.sub(r'\s+', ' ', creditor)  # Mehrfache Leerzeichen entfernen
+                creditor = creditor.rstrip(',.-')  # Trailing punctuation entfernen
+                if len(creditor) > 3 and creditor != "Unbekannter Gläubiger":
+                    break
+
+        # Schuldner/Gegner finden
+        for pattern in debtor_patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                debtor = match.group(1).strip()
+                # Bereinigen
+                debtor = re.sub(r'\s+', ' ', debtor)  # Mehrfache Leerzeichen entfernen
+                debtor = debtor.rstrip(',.-')  # Trailing punctuation entfernen
+                if len(debtor) > 3 and debtor != "Unbekannter Schuldner":
+                    break
+
+        # Adressen extrahieren
+        address_pattern = r'(?:wohnhaft|Anschrift|Adresse|PLZ)[:\s]*([A-Za-zäöüÄÖÜß\s\-\.0-9,]+?\d{5}\s+[A-Za-zäöüÄÖÜß\-]+)'
+
+        # Versuche Schuldneradresse zu finden (erscheint oft nach Schuldnername)
+        debtor_addr_match = re.search(
+            rf'{re.escape(debtor[:20])}[^\n]*\n([A-Za-zäöüÄÖÜß\s\-\.0-9]+?\d{{5}}\s+[A-Za-zäöüÄÖÜß\-]+)',
+            full_text, re.IGNORECASE
+        )
+        if debtor_addr_match:
+            debtor_address = debtor_addr_match.group(1).strip()
+        else:
+            # Fallback: Allgemeine Adresssuche
+            addr_matches = re.findall(r'([A-Za-zäöüÄÖÜß\-\.]+(?:straße|str\.|weg|platz|allee)\s*\d+[a-z]?\s*\n?\s*\d{5}\s+[A-Za-zäöüÄÖÜß\-]+)', full_text, re.IGNORECASE)
+            if addr_matches:
+                debtor_address = addr_matches[-1] if len(addr_matches) > 0 else ""  # Letzte Adresse oft Schuldner
 
         # Inhaltsverzeichnis parsen - Dokumente identifizieren mit Kategorien
         documents = []
@@ -1095,6 +1152,8 @@ def parse_ra_micro_pdf(pdf_file):
             'aktenzeichen': aktenzeichen,
             'creditor': creditor[:50],
             'debtor': debtor[:50],
+            'creditor_address': creditor_address,
+            'debtor_address': debtor_address,
             'documents': documents,
             'bookings': bookings,
             'status': status,
@@ -1150,8 +1209,12 @@ def show_ra_micro_import():
             with col1:
                 st.markdown("#### 📋 Akten-Informationen")
                 st.write(f"**Aktenzeichen:** {result['aktenzeichen']}")
-                st.write(f"**Gläubiger:** {result['creditor']}")
-                st.write(f"**Schuldner:** {result['debtor']}")
+                st.write(f"**Gläubiger (Mandant):** {result['creditor']}")
+                if result.get('creditor_address'):
+                    st.caption(f"   {result['creditor_address']}")
+                st.write(f"**Schuldner (Gegner):** {result['debtor']}")
+                if result.get('debtor_address'):
+                    st.caption(f"   {result['debtor_address']}")
                 st.write(f"**Status:** {result['status'].title()}")
                 st.write(f"**Seiten:** {result['num_pages']}")
 
@@ -1234,6 +1297,8 @@ def show_ra_micro_import():
                         'nr': result['aktenzeichen'],
                         'creditor': result['creditor'],
                         'debtor': result['debtor'],
+                        'creditor_address': result.get('creditor_address', ''),
+                        'debtor_address': result.get('debtor_address', ''),
                         'subject': f'Import aus RA-Micro - {uploaded_pdf.name}',
                         'status': result['status'],
                         'dunning': result['dunning'],
@@ -1243,7 +1308,14 @@ def show_ra_micro_import():
                         'due_date': date.today() - timedelta(days=60),
                         'created': datetime.now(),
                         'imported': True,
-                        'source_pdf': uploaded_pdf.name
+                        'source_pdf': uploaded_pdf.name,
+                        # Zusätzliche Felder für Kompatibilität
+                        'contract_type': 'Importiert',
+                        'contract_date': date.today() - timedelta(days=90),
+                        'invoice_nr': f'IMP-{new_case_id}',
+                        'invoice_date': date.today() - timedelta(days=60),
+                        'leistung': 'Aus RA-Micro Import',
+                        'mahnung_dates': [],
                     }
 
                     # Zur Liste hinzufügen
