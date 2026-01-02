@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.02-0915"
+APP_VERSION = "v2026.01.02-1030"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -49,6 +49,10 @@ if 'imported_bookings' not in st.session_state:
     st.session_state.imported_bookings = {}
 if 'pdf_viewer_content' not in st.session_state:
     st.session_state.pdf_viewer_content = None
+if 'document_pdfs' not in st.session_state:
+    st.session_state.document_pdfs = {}  # {doc_id: pdf_bytes} für einzelne Dokument-PDFs
+if 'case_full_pdfs' not in st.session_state:
+    st.session_state.case_full_pdfs = {}  # {case_id: pdf_bytes} für Gesamt-PDFs
 # AI & Kommunikation
 if 'openai_api_key' not in st.session_state:
     # Zuerst in Streamlit Secrets nachschauen
@@ -935,6 +939,31 @@ def show_document_explorer(case_id, case_nr):
     """
     st.markdown("### 📁 Dokumenten-Explorer")
 
+    # Gesamt-PDF anzeigen Button (für importierte Akten)
+    if case_id in st.session_state.case_full_pdfs:
+        with st.expander("📖 **Gesamt-PDF der Akte anzeigen**", expanded=False):
+            full_pdf = st.session_state.case_full_pdfs[case_id]
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.info(f"📄 Original-PDF der importierten Akte ({len(full_pdf) // 1024} KB)")
+            with col2:
+                st.download_button(
+                    "⬇️ Download",
+                    data=full_pdf,
+                    file_name=f"Akte_{case_nr.replace('/', '_')}_Gesamt.pdf",
+                    mime="application/pdf",
+                    key=f"full_pdf_dl_{case_id}"
+                )
+
+            # PDF-Viewer
+            pdf_base64 = base64.b64encode(full_pdf).decode('utf-8')
+            st.markdown(f'''
+            <iframe src="data:application/pdf;base64,{pdf_base64}" width="100%" height="600px"
+                style="border: 1px solid #ccc; border-radius: 5px;"></iframe>
+            ''', unsafe_allow_html=True)
+
+        st.divider()
+
     # Alle Dokumente der Akte abrufen
     all_docs = get_all_documents(case_id)
 
@@ -1033,6 +1062,42 @@ def show_document_explorer(case_id, case_nr):
             st.success(f"✅ '{uploaded.name}' zur Akte hinzugefügt!")
             st.rerun()
 
+def get_document_pdf(doc, case_nr):
+    """
+    Holt die PDF-Bytes für ein Dokument.
+    Priorisierung:
+    1. Individuelles Dokument-PDF (aufgeteilt aus Gesamt-PDF)
+    2. Gesamt-PDF der Akte
+    3. Demo-PDF
+    """
+    doc_id = doc.get('id', '')
+
+    # 1. Prüfen ob individuelles Dokument-PDF vorhanden
+    if doc_id in st.session_state.document_pdfs:
+        return st.session_state.document_pdfs[doc_id], True
+
+    # 2. Prüfen ob Gesamt-PDF für die Akte vorhanden
+    # Akte-ID aus doc_id extrahieren (Format: imp-doc-XXX -> case_id ist in imported_documents)
+    for case_id, docs in st.session_state.get('imported_documents', {}).items():
+        for d in docs:
+            if d.get('id') == doc_id:
+                if case_id in st.session_state.case_full_pdfs:
+                    # Seite aus Gesamt-PDF extrahieren
+                    page_num = doc.get('page', 1) - 1
+                    full_pdf = st.session_state.case_full_pdfs[case_id]
+                    single_page = extract_pdf_pages(full_pdf, page_num)
+                    if single_page:
+                        return single_page, True
+                    return full_pdf, True
+
+    # 3. Fallback auf alte pdf_viewer_content (Kompatibilität)
+    if st.session_state.pdf_viewer_content is not None:
+        return st.session_state.pdf_viewer_content, True
+
+    # 4. Demo-PDF generieren
+    return generate_demo_pdf(doc['name'], case_nr), False
+
+
 def show_document_item(doc, case_nr, key_prefix, show_category=False):
     """Zeigt ein einzelnes Dokument in kompakter Form"""
     cat_id = doc.get('category', 'aussergerichtlich')
@@ -1051,13 +1116,8 @@ def show_document_item(doc, case_nr, key_prefix, show_category=False):
         st.write(fmt_date(doc['date']))
 
     with col3:
-        # Prüfen ob echtes PDF vorhanden
-        has_real_pdf = st.session_state.pdf_viewer_content is not None
-
-        if has_real_pdf:
-            pdf_content = st.session_state.pdf_viewer_content
-        else:
-            pdf_content = generate_demo_pdf(doc['name'], case_nr)
+        # PDF-Inhalt für dieses Dokument holen
+        pdf_content, is_real_pdf = get_document_pdf(doc, case_nr)
 
         st.download_button(
             "⬇️",
@@ -1074,15 +1134,11 @@ def show_document_item(doc, case_nr, key_prefix, show_category=False):
 
     # Vorschau anzeigen wenn aktiviert
     if st.session_state.get(f"viewing_{doc['id']}", False):
-        has_real_pdf = st.session_state.pdf_viewer_content is not None
-        if has_real_pdf:
-            pdf_content = st.session_state.pdf_viewer_content
-        else:
-            pdf_content = generate_demo_pdf(doc['name'], case_nr)
+        pdf_content, is_real_pdf = get_document_pdf(doc, case_nr)
 
         with st.container():
             st.divider()
-            if has_real_pdf and doc['name'].endswith('.pdf'):
+            if is_real_pdf and doc['name'].endswith('.pdf'):
                 pdf_base64 = base64.b64encode(pdf_content).decode('utf-8')
                 st.markdown(f'''
                 <iframe src="data:application/pdf;base64,{pdf_base64}" width="100%" height="400px"
@@ -1101,6 +1157,91 @@ def show_document_item(doc, case_nr, key_prefix, show_category=False):
 # =============================================================================
 # RA-MICRO IMPORT FUNKTIONEN
 # =============================================================================
+
+def extract_pdf_pages(pdf_bytes, start_page, end_page=None):
+    """
+    Extrahiert bestimmte Seiten aus einem PDF.
+
+    Args:
+        pdf_bytes: Die PDF als Bytes
+        start_page: Startseite (0-indiziert)
+        end_page: Endseite (0-indiziert, inklusiv). Wenn None, nur start_page
+
+    Returns:
+        bytes: Die extrahierten Seiten als neues PDF
+    """
+    try:
+        from PyPDF2 import PdfReader, PdfWriter
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        writer = PdfWriter()
+
+        if end_page is None:
+            end_page = start_page
+
+        # Seitenzahlen begrenzen
+        start_page = max(0, min(start_page, len(reader.pages) - 1))
+        end_page = max(start_page, min(end_page, len(reader.pages) - 1))
+
+        for page_num in range(start_page, end_page + 1):
+            writer.add_page(reader.pages[page_num])
+
+        output = io.BytesIO()
+        writer.write(output)
+        output.seek(0)
+        return output.getvalue()
+
+    except Exception as e:
+        st.error(f"Fehler beim Extrahieren der PDF-Seiten: {str(e)}")
+        return None
+
+
+def split_pdf_by_toc(pdf_bytes, documents):
+    """
+    Teilt eine PDF basierend auf dem Inhaltsverzeichnis (Dokument-Seitenzuordnungen) auf.
+
+    Args:
+        pdf_bytes: Die komplette PDF als Bytes
+        documents: Liste der Dokumente mit 'page' (Startseite)
+
+    Returns:
+        dict: {doc_id: pdf_bytes} für jedes Dokument
+    """
+    if not documents or not pdf_bytes:
+        return {}
+
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        num_pages = len(reader.pages)
+
+        # Dokumente nach Seite sortieren
+        sorted_docs = sorted(documents, key=lambda d: d.get('page', 1))
+
+        result = {}
+        for i, doc in enumerate(sorted_docs):
+            start_page = doc.get('page', 1) - 1  # 0-indiziert
+            start_page = max(0, min(start_page, num_pages - 1))
+
+            # Endseite ist die Seite vor dem nächsten Dokument, oder letzte Seite
+            if i + 1 < len(sorted_docs):
+                next_page = sorted_docs[i + 1].get('page', num_pages + 1) - 1
+                end_page = max(start_page, next_page - 1)
+            else:
+                end_page = num_pages - 1
+
+            # Einzelnes Dokument extrahieren
+            doc_pdf = extract_pdf_pages(pdf_bytes, start_page, end_page)
+            if doc_pdf:
+                result[doc['id']] = doc_pdf
+
+        return result
+
+    except Exception as e:
+        st.error(f"Fehler beim Aufteilen der PDF: {str(e)}")
+        return {}
+
+
 def parse_ra_micro_pdf(pdf_file):
     """
     Parst eine RA-Micro Gesamt-PDF und extrahiert:
@@ -1618,11 +1759,28 @@ def show_ra_micro_import():
                     st.session_state.imported_documents[new_case_id] = result['documents']
                     DEMO_DOCUMENTS[new_case_id] = result['documents']
 
+                    # Gesamt-PDF für die Akte speichern
+                    st.session_state.case_full_pdfs[new_case_id] = pdf_bytes
+
+                    # PDF in einzelne Dokumente aufteilen
+                    doc_pdfs = split_pdf_by_toc(pdf_bytes, result['documents'])
+                    for doc_id, doc_pdf in doc_pdfs.items():
+                        st.session_state.document_pdfs[doc_id] = doc_pdf
+
+                    # Falls Dokumente keine eigenen PDFs haben, Gesamt-PDF zuweisen
+                    for doc in result['documents']:
+                        if doc['id'] not in st.session_state.document_pdfs:
+                            # Einzelne Seite extrahieren
+                            page_num = doc.get('page', 1) - 1
+                            single_page = extract_pdf_pages(pdf_bytes, page_num)
+                            if single_page:
+                                st.session_state.document_pdfs[doc['id']] = single_page
+
                     # Buchungen hinzufügen
                     st.session_state.imported_bookings[new_case_id] = result['bookings']
                     DEMO_BOOKINGS[new_case_id] = result['bookings']
 
-                    st.success(f"✅ Akte {result['aktenzeichen']} erfolgreich importiert!")
+                    st.success(f"✅ Akte {result['aktenzeichen']} mit {len(doc_pdfs)} Dokumenten erfolgreich importiert!")
                     st.balloons()
 
                     # Zur Aktenübersicht wechseln
@@ -1804,7 +1962,7 @@ def show_lawyer_overview():
     status_order = {'offen': 1, 'mahnverfahren': 2, 'vollstreckung': 3, 'abgeschlossen': 4}
     reverse = sort_order == "Absteigend"
 
-    sorted_cases = DEMO_CASES.copy()
+    sorted_cases = get_all_cases()
     if sort_by == "Status":
         sorted_cases.sort(key=lambda x: status_order.get(x['status'], 99), reverse=reverse)
     elif sort_by == "Zahlungsstatus (offen→bezahlt)":
