@@ -1202,7 +1202,7 @@ def split_pdf_by_toc(pdf_bytes, documents):
 
     Args:
         pdf_bytes: Die komplette PDF als Bytes
-        documents: Liste der Dokumente mit 'page' (Startseite)
+        documents: Liste der Dokumente mit 'page' (Startseite) und optional 'end_page'
 
     Returns:
         dict: {doc_id: pdf_bytes} für jedes Dokument
@@ -1223,23 +1223,76 @@ def split_pdf_by_toc(pdf_bytes, documents):
             start_page = doc.get('page', 1) - 1  # 0-indiziert
             start_page = max(0, min(start_page, num_pages - 1))
 
-            # Endseite ist die Seite vor dem nächsten Dokument, oder letzte Seite
-            if i + 1 < len(sorted_docs):
+            # Endseite aus Dokument nehmen oder berechnen
+            if 'end_page' in doc and doc['end_page']:
+                end_page = doc['end_page'] - 1  # 0-indiziert
+            elif i + 1 < len(sorted_docs):
                 next_page = sorted_docs[i + 1].get('page', num_pages + 1) - 1
                 end_page = max(start_page, next_page - 1)
             else:
                 end_page = num_pages - 1
 
+            end_page = max(start_page, min(end_page, num_pages - 1))
+
             # Einzelnes Dokument extrahieren
             doc_pdf = extract_pdf_pages(pdf_bytes, start_page, end_page)
             if doc_pdf:
                 result[doc['id']] = doc_pdf
+                # Größe aktualisieren
+                doc['size'] = f'{len(doc_pdf) // 1024} KB'
 
         return result
 
     except Exception as e:
         st.error(f"Fehler beim Aufteilen der PDF: {str(e)}")
         return {}
+
+
+def render_pdf_page_as_image(pdf_bytes, page_num, width=200):
+    """
+    Rendert eine PDF-Seite als Base64-Bild für die Vorschau.
+
+    Args:
+        pdf_bytes: Die PDF als Bytes
+        page_num: Seitennummer (0-indiziert)
+        width: Breite des Bildes in Pixel
+
+    Returns:
+        str: Base64-kodiertes Bild oder None bei Fehler
+    """
+    try:
+        # Versuche pdf2image zu nutzen (erfordert poppler)
+        try:
+            from pdf2image import convert_from_bytes
+            images = convert_from_bytes(
+                pdf_bytes,
+                first_page=page_num + 1,
+                last_page=page_num + 1,
+                size=(width, None)
+            )
+            if images:
+                img_buffer = io.BytesIO()
+                images[0].save(img_buffer, format='PNG')
+                img_buffer.seek(0)
+                return base64.b64encode(img_buffer.getvalue()).decode('utf-8')
+        except ImportError:
+            pass
+
+        # Fallback: Seite als Mini-PDF anzeigen
+        return None
+
+    except Exception:
+        return None
+
+
+def get_pdf_page_count(pdf_bytes):
+    """Gibt die Anzahl der Seiten in einer PDF zurück."""
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        return len(reader.pages)
+    except Exception:
+        return 0
 
 
 def parse_ra_micro_pdf(pdf_file):
@@ -1405,57 +1458,139 @@ def parse_ra_micro_pdf(pdf_file):
             'notiz': 'intern',
             'vermerk': 'intern',
             'aktennotiz': 'intern',
+            'aktenvorblatt': 'intern',
+            'inhaltsverzeichnis': 'intern',
             'sachstandsbericht': 'mandant',
             'vollmacht': 'mandant',
             'mandantenbrief': 'mandant',
             'schuldnerbrief': 'schuldner',
             'ratenzahlung': 'schuldner',
             'vergleich': 'schuldner',
+            'forderungskonto': 'intern',
+            'kostenrechnung': 'aussergerichtlich',
+            'zahlungsaufforderung': 'aussergerichtlich',
+            'anschreiben': 'aussergerichtlich',
         }
 
+        # ============================================================
+        # VERBESSERTE INHALTSVERZEICHNIS-ERKENNUNG
+        # ============================================================
+
+        # Muster für typische RA-Micro Inhaltsverzeichnis-Formate:
+        # "Seite 1 - 3: Aktenvorblatt"
+        # "Seite 4: Rechnung Nr. 123"
+        # "1. Rechnung vom 01.01.2024......Seite 5"
+        # "Rechnung                    Seite 5"
+        # "- Mahnung vom 15.01.2024    S. 8-10"
+
         toc_patterns = [
-            r'(\d+)\.\s+(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief|Forderungsaufstellung|Notiz|Vermerk|Sachstandsbericht|Vollmacht|Klage|PfÜB|Zustellung)[^\n]*(?:Seite\s*)?(\d+)?',
-            r'(Seite\s*)?(\d+)\s*[-–]\s*(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Brief|Klage)',
-            r'[-•]\s*(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Notiz|Vollmacht|Klage|PfÜB)',
+            # Format: "Seite X - Y: Dokumentname" oder "Seite X: Dokumentname"
+            r'Seite\s*(\d+)\s*(?:[-–bis]\s*(\d+))?\s*[:\s]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9]+)',
+
+            # Format: "Dokumentname......Seite X" oder "Dokumentname    Seite X-Y"
+            r'([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-]+?)[\.\s]{2,}(?:Seite|S\.?)\s*(\d+)\s*(?:[-–bis]\s*(\d+))?',
+
+            # Format: "X. Dokumentname" mit optionaler Seitenzahl
+            r'(\d+)\.\s+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.]+?)(?:\s+(?:Seite|S\.?)\s*(\d+))?(?:\n|$)',
+
+            # Format: "- Dokumentname (Seite X)"
+            r'[-•]\s*([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9]+?)(?:\s*\(?\s*(?:Seite|S\.?)\s*(\d+)\s*(?:[-–bis]\s*(\d+))?\s*\)?)?(?:\n|$)',
+
+            # Format: Einzelne bekannte Dokumenttypen mit Seitenzahlen
+            r'(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Vollmacht|Klage|PfÜB|Zustellung|Forderungskonto|Aktenvorblatt)(?:[^\n]*?)(?:Seite|S\.?)\s*(\d+)',
         ]
 
         doc_id_counter = 1
-        found_types = set()
+        found_documents = []  # Liste für alle gefundenen Dokumente
+
+        # Zuerst versuchen wir das Inhaltsverzeichnis auf den ersten Seiten zu finden
+        toc_text = "\n".join([page_texts.get(i, "") for i in range(min(3, num_pages))])
 
         for pattern in toc_patterns:
-            for match in re.finditer(pattern, full_text, re.IGNORECASE):
+            for match in re.finditer(pattern, toc_text + "\n" + full_text[:5000], re.IGNORECASE):
                 groups = match.groups()
-                doc_type = None
-                page_num = 1
+                doc_name = None
+                start_page = 1
+                end_page = None
 
-                for g in groups:
+                # Pattern-spezifische Extraktion
+                for i, g in enumerate(groups):
                     if g:
-                        g_lower = g.lower().strip()
-                        if g_lower in doc_type_categories or any(t in g_lower for t in doc_type_categories.keys()):
-                            doc_type = g.title()
-                        elif g.isdigit():
-                            page_num = int(g)
+                        g_stripped = g.strip()
+                        # Prüfen ob es eine Seitenzahl ist
+                        if g_stripped.isdigit():
+                            page_val = int(g_stripped)
+                            if page_val <= num_pages:
+                                if start_page == 1 or page_val < start_page:
+                                    start_page = page_val
+                                elif page_val > start_page:
+                                    end_page = page_val
+                        else:
+                            # Dokumentname extrahieren
+                            potential_name = g_stripped
+                            # Bereinigen
+                            potential_name = re.sub(r'^[\d\.\-\s]+', '', potential_name)
+                            potential_name = re.sub(r'[\.\s]+$', '', potential_name)
+                            if len(potential_name) >= 3 and not potential_name.isdigit():
+                                doc_name = potential_name
 
-                if doc_type and doc_type.lower() not in found_types:
-                    found_types.add(doc_type.lower())
-
-                    # Kategorie ermitteln
-                    category = 'aussergerichtlich'
-                    for key, cat in doc_type_categories.items():
-                        if key in doc_type.lower():
-                            category = cat
+                if doc_name and start_page > 0:
+                    # Prüfen ob ähnliches Dokument bereits existiert
+                    is_duplicate = False
+                    for existing in found_documents:
+                        if existing['start_page'] == start_page and doc_name.lower()[:10] == existing['name'].lower()[:10]:
+                            is_duplicate = True
                             break
 
-                    documents.append({
-                        'id': f'imp-doc-{doc_id_counter:03d}',
-                        'name': f'{doc_type}_{doc_id_counter}.pdf',
-                        'type': doc_type,
-                        'category': category,
-                        'page': min(page_num, num_pages),
-                        'date': date.today() - timedelta(days=doc_id_counter * 10),
-                        'size': f'{max(50, num_pages * 10)} KB'
-                    })
-                    doc_id_counter += 1
+                    if not is_duplicate:
+                        # Kategorie ermitteln
+                        category = 'aussergerichtlich'
+                        doc_type = doc_name
+                        for key, cat in doc_type_categories.items():
+                            if key in doc_name.lower():
+                                category = cat
+                                doc_type = key.title()
+                                break
+
+                        found_documents.append({
+                            'name': doc_name,
+                            'type': doc_type,
+                            'category': category,
+                            'start_page': min(start_page, num_pages),
+                            'end_page': min(end_page, num_pages) if end_page else None,
+                        })
+
+        # Dokumente nach Startseite sortieren
+        found_documents.sort(key=lambda x: x['start_page'])
+
+        # End-Seiten berechnen falls nicht angegeben
+        for i, doc in enumerate(found_documents):
+            if doc['end_page'] is None:
+                if i + 1 < len(found_documents):
+                    # Nächstes Dokument beginnt auf nächster Seite
+                    doc['end_page'] = found_documents[i + 1]['start_page'] - 1
+                else:
+                    # Letztes Dokument geht bis zum Ende
+                    doc['end_page'] = num_pages
+            # Mindestens eine Seite
+            if doc['end_page'] < doc['start_page']:
+                doc['end_page'] = doc['start_page']
+
+        # Finale Dokument-Liste erstellen
+        for doc in found_documents:
+            page_count = doc['end_page'] - doc['start_page'] + 1
+            documents.append({
+                'id': f'imp-doc-{doc_id_counter:03d}',
+                'name': f"{doc['name'][:40]}.pdf",
+                'type': doc['type'],
+                'category': doc['category'],
+                'page': doc['start_page'],
+                'end_page': doc['end_page'],
+                'page_count': page_count,
+                'date': date.today() - timedelta(days=doc_id_counter * 5),
+                'size': f'{max(50, page_count * 30)} KB'
+            })
+            doc_id_counter += 1
 
         # Fallback: Wenn keine Dokumente gefunden, Standarddokumente mit Kategorien erstellen
         if not documents:
@@ -1716,6 +1851,157 @@ def show_ra_micro_import():
 
             st.divider()
 
+            # =====================================================================
+            # MANUELLE DOKUMENTENTRENNUNG
+            # =====================================================================
+            st.markdown("#### ✂️ Manuelle Dokumententrennung")
+            st.info("Falls die automatische Erkennung nicht alle Dokumente korrekt getrennt hat, können Sie hier manuell Trennstellen setzen.")
+
+            # Session State für manuelle Trennungen initialisieren
+            if 'manual_splits' not in st.session_state:
+                st.session_state.manual_splits = []
+            if 'manual_doc_names' not in st.session_state:
+                st.session_state.manual_doc_names = {}
+
+            num_pages = result['num_pages']
+
+            # Toggle für manuelle Trennung
+            use_manual_split = st.checkbox(
+                "🔧 Manuelle Trennung aktivieren",
+                help="Aktivieren Sie diese Option, um die Dokumentgrenzen manuell festzulegen"
+            )
+
+            if use_manual_split:
+                st.markdown("##### 📄 Seiten-Übersicht")
+                st.caption("Klicken Sie auf die Schaltflächen zwischen den Seiten, um Trennstellen zu setzen. Grüne Markierungen zeigen Dokumentanfänge.")
+
+                # Seiten in Reihen zu je 5 anzeigen
+                pages_per_row = 5
+
+                for row_start in range(0, num_pages, pages_per_row):
+                    row_end = min(row_start + pages_per_row, num_pages)
+                    cols = st.columns(pages_per_row * 2 - 1)  # Seiten + Trennbuttons
+
+                    col_idx = 0
+                    for page_num in range(row_start, row_end):
+                        # Seitenvorschau
+                        with cols[col_idx]:
+                            is_split = page_num in st.session_state.manual_splits or page_num == 0
+
+                            # Seite als Mini-PDF anzeigen
+                            page_pdf = extract_pdf_pages(pdf_bytes, page_num)
+                            if page_pdf:
+                                page_b64 = base64.b64encode(page_pdf).decode('utf-8')
+                                border_color = "#28a745" if is_split else "#dee2e6"
+                                border_width = "3px" if is_split else "1px"
+                                st.markdown(f'''
+                                <div style="text-align: center; margin-bottom: 5px;">
+                                    <div style="border: {border_width} solid {border_color}; border-radius: 4px; padding: 2px; display: inline-block;">
+                                        <iframe
+                                            src="data:application/pdf;base64,{page_b64}#toolbar=0&navpanes=0&scrollbar=0"
+                                            width="100"
+                                            height="140"
+                                            style="border: none;">
+                                        </iframe>
+                                    </div>
+                                    <div style="font-size: 12px; color: {'#28a745' if is_split else '#666'}; font-weight: {'bold' if is_split else 'normal'};">
+                                        Seite {page_num + 1}
+                                        {'📄' if is_split else ''}
+                                    </div>
+                                </div>
+                                ''', unsafe_allow_html=True)
+                            else:
+                                st.markdown(f'''
+                                <div style="text-align: center; border: 2px solid {"#28a745" if is_split else "#ccc"};
+                                    padding: 20px; border-radius: 5px; background: {"#d4edda" if is_split else "#f8f9fa"};">
+                                    <div style="font-size: 24px;">📄</div>
+                                    <div style="font-size: 14px; font-weight: bold;">Seite {page_num + 1}</div>
+                                    {'<div style="color: #28a745;">✂️ Neues Dokument</div>' if is_split else ''}
+                                </div>
+                                ''', unsafe_allow_html=True)
+
+                        col_idx += 1
+
+                        # Trennbutton zwischen Seiten (nicht nach der letzten Seite einer Zeile)
+                        if page_num < row_end - 1 and col_idx < len(cols):
+                            with cols[col_idx]:
+                                st.markdown("<div style='height: 50px;'></div>", unsafe_allow_html=True)
+                                next_page = page_num + 1
+                                if next_page in st.session_state.manual_splits:
+                                    if st.button("✂️", key=f"split_{next_page}", help=f"Trennung vor Seite {next_page + 1} entfernen"):
+                                        st.session_state.manual_splits.remove(next_page)
+                                        st.rerun()
+                                else:
+                                    if st.button("➕", key=f"split_{next_page}", help=f"Trennung vor Seite {next_page + 1} hinzufügen"):
+                                        st.session_state.manual_splits.append(next_page)
+                                        st.session_state.manual_splits.sort()
+                                        st.rerun()
+                            col_idx += 1
+
+                    st.markdown("<hr style='margin: 10px 0; border-color: #eee;'>", unsafe_allow_html=True)
+
+                # Trennstellen zwischen Zeilen hinzufügen
+                st.markdown("##### ➕ Trennstellen zwischen Zeilen")
+                st.caption("Für Seiten an Zeilengrenzen:")
+
+                boundary_cols = st.columns(6)
+                for i, boundary_page in enumerate(range(pages_per_row, num_pages, pages_per_row)):
+                    with boundary_cols[i % 6]:
+                        if boundary_page in st.session_state.manual_splits:
+                            if st.button(f"✂️ Vor S.{boundary_page + 1}", key=f"boundary_{boundary_page}"):
+                                st.session_state.manual_splits.remove(boundary_page)
+                                st.rerun()
+                        else:
+                            if st.button(f"➕ Vor S.{boundary_page + 1}", key=f"boundary_{boundary_page}"):
+                                st.session_state.manual_splits.append(boundary_page)
+                                st.session_state.manual_splits.sort()
+                                st.rerun()
+
+                st.divider()
+
+                # Zusammenfassung der manuellen Dokumente
+                st.markdown("##### 📋 Resultierende Dokumente")
+
+                # Dokumente aus Trennstellen berechnen
+                all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
+                manual_docs = []
+                for i in range(len(all_splits) - 1):
+                    start_page = all_splits[i]
+                    end_page = all_splits[i + 1] - 1
+                    doc_key = f"manual_doc_{i}"
+                    manual_docs.append({
+                        'id': doc_key,
+                        'start': start_page,
+                        'end': end_page,
+                        'pages': f"{start_page + 1}" if start_page == end_page else f"{start_page + 1}-{end_page + 1}"
+                    })
+
+                st.success(f"📊 {len(manual_docs)} Dokumente werden erstellt")
+
+                # Dokumentnamen bearbeiten
+                for doc in manual_docs:
+                    c1, c2 = st.columns([1, 3])
+                    with c1:
+                        st.markdown(f"**Seiten {doc['pages']}**")
+                    with c2:
+                        default_name = st.session_state.manual_doc_names.get(doc['id'], f"Dokument (Seiten {doc['pages']})")
+                        new_name = st.text_input(
+                            "Name",
+                            value=default_name,
+                            key=f"name_{doc['id']}",
+                            label_visibility="collapsed"
+                        )
+                        st.session_state.manual_doc_names[doc['id']] = new_name
+
+                # Zurücksetzen-Button
+                if st.session_state.manual_splits:
+                    if st.button("🔄 Alle Trennungen zurücksetzen"):
+                        st.session_state.manual_splits = []
+                        st.session_state.manual_doc_names = {}
+                        st.rerun()
+
+            st.divider()
+
             # Import-Button
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
@@ -1753,34 +2039,74 @@ def show_ra_micro_import():
                     st.session_state.imported_cases.append(new_case)
                     DEMO_CASES.append(new_case)
 
-                    # Dokumente hinzufügen
-                    for doc in result['documents']:
-                        doc['size'] = f"{len(pdf_bytes) // len(result['documents']) // 1024} KB"
-                    st.session_state.imported_documents[new_case_id] = result['documents']
-                    DEMO_DOCUMENTS[new_case_id] = result['documents']
+                    # Dokumente bestimmen: manuell oder automatisch
+                    if use_manual_split and st.session_state.manual_splits:
+                        # Manuelle Dokumenttrennung verwenden
+                        all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
+                        documents_to_import = []
+                        doc_pdfs = {}
+
+                        for i in range(len(all_splits) - 1):
+                            start_page = all_splits[i]
+                            end_page = all_splits[i + 1] - 1
+                            doc_key = f"manual_doc_{i}"
+                            doc_id = f"{new_case_id}-doc-{i+1}"
+                            doc_name = st.session_state.manual_doc_names.get(doc_key, f"Dokument {i+1}")
+
+                            doc = {
+                                'id': doc_id,
+                                'name': doc_name,
+                                'type': 'Importiert (manuell)',
+                                'date': date.today().strftime('%d.%m.%Y'),
+                                'page': start_page + 1,
+                                'end_page': end_page + 1,
+                                'category': 'aussergerichtlich',
+                                'size': f"{(end_page - start_page + 1) * 50} KB"
+                            }
+                            documents_to_import.append(doc)
+
+                            # PDF für dieses Dokument extrahieren
+                            doc_pdf = extract_pdf_pages(pdf_bytes, start_page, end_page)
+                            if doc_pdf:
+                                doc_pdfs[doc_id] = doc_pdf
+                                st.session_state.document_pdfs[doc_id] = doc_pdf
+
+                        st.session_state.imported_documents[new_case_id] = documents_to_import
+                        DEMO_DOCUMENTS[new_case_id] = documents_to_import
+
+                        # Session State für manuelle Trennung zurücksetzen
+                        st.session_state.manual_splits = []
+                        st.session_state.manual_doc_names = {}
+                    else:
+                        # Automatische Dokumenttrennung verwenden
+                        for doc in result['documents']:
+                            doc['size'] = f"{len(pdf_bytes) // max(1, len(result['documents'])) // 1024} KB"
+                        st.session_state.imported_documents[new_case_id] = result['documents']
+                        DEMO_DOCUMENTS[new_case_id] = result['documents']
+
+                        # PDF in einzelne Dokumente aufteilen
+                        doc_pdfs = split_pdf_by_toc(pdf_bytes, result['documents'])
+                        for doc_id, doc_pdf in doc_pdfs.items():
+                            st.session_state.document_pdfs[doc_id] = doc_pdf
+
+                        # Falls Dokumente keine eigenen PDFs haben, Gesamt-PDF zuweisen
+                        for doc in result['documents']:
+                            if doc['id'] not in st.session_state.document_pdfs:
+                                # Einzelne Seite extrahieren
+                                page_num = doc.get('page', 1) - 1
+                                single_page = extract_pdf_pages(pdf_bytes, page_num)
+                                if single_page:
+                                    st.session_state.document_pdfs[doc['id']] = single_page
 
                     # Gesamt-PDF für die Akte speichern
                     st.session_state.case_full_pdfs[new_case_id] = pdf_bytes
-
-                    # PDF in einzelne Dokumente aufteilen
-                    doc_pdfs = split_pdf_by_toc(pdf_bytes, result['documents'])
-                    for doc_id, doc_pdf in doc_pdfs.items():
-                        st.session_state.document_pdfs[doc_id] = doc_pdf
-
-                    # Falls Dokumente keine eigenen PDFs haben, Gesamt-PDF zuweisen
-                    for doc in result['documents']:
-                        if doc['id'] not in st.session_state.document_pdfs:
-                            # Einzelne Seite extrahieren
-                            page_num = doc.get('page', 1) - 1
-                            single_page = extract_pdf_pages(pdf_bytes, page_num)
-                            if single_page:
-                                st.session_state.document_pdfs[doc['id']] = single_page
 
                     # Buchungen hinzufügen
                     st.session_state.imported_bookings[new_case_id] = result['bookings']
                     DEMO_BOOKINGS[new_case_id] = result['bookings']
 
-                    st.success(f"✅ Akte {result['aktenzeichen']} mit {len(doc_pdfs)} Dokumenten erfolgreich importiert!")
+                    num_docs = len(doc_pdfs) if doc_pdfs else len(result['documents'])
+                    st.success(f"✅ Akte {result['aktenzeichen']} mit {num_docs} Dokumenten erfolgreich importiert!")
                     st.balloons()
 
                     # Zur Aktenübersicht wechseln
