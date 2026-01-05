@@ -559,6 +559,24 @@ def get_balance(case_id):
     h = sum(x['amount'] for x in b if x['type'] == 'H')
     return s, h, s - h
 
+def parse_date_flexible(date_value):
+    """Konvertiert verschiedene Datumsformate in ein date-Objekt."""
+    if date_value is None:
+        return None
+    if isinstance(date_value, date) and not isinstance(date_value, datetime):
+        return date_value
+    if isinstance(date_value, datetime):
+        return date_value.date()
+    if isinstance(date_value, str):
+        # Versuche verschiedene Formate
+        for fmt in ['%Y-%m-%d', '%d.%m.%Y', '%d/%m/%Y', '%Y/%m/%d']:
+            try:
+                return datetime.strptime(date_value, fmt).date()
+            except ValueError:
+                continue
+    return None
+
+
 def calculate_interest_for_case(case, bookings):
     """
     Berechnet die aktuellen Verzugszinsen für eine Akte.
@@ -574,22 +592,29 @@ def calculate_interest_for_case(case, bookings):
     if not case:
         return 0.0
 
-    # Zinssatz aus der Akte (Standard: 5% über Basiszins, ca. 8-9% gesamt)
+    # Zinssatz aus der Akte (Standard: 5% über Basiszins)
     zinssatz = case.get('interest', 5.0)
+    if zinssatz is None or zinssatz == 0:
+        zinssatz = 5.0  # Gesetzlicher Verzugszins für Verbraucher
 
-    # Fälligkeitsdatum
-    faellig = case.get('due_date')
+    # Fälligkeitsdatum ermitteln
+    faellig = parse_date_flexible(case.get('due_date'))
+
     if not faellig:
-        # Falls kein Fälligkeitsdatum, erstes Buchungsdatum verwenden
-        soll_buchungen = [b for b in bookings if b['type'] == 'S']
+        # Falls kein Fälligkeitsdatum, aus Buchungen ermitteln
+        soll_buchungen = [b for b in bookings if b.get('type') == 'S']
         if soll_buchungen:
-            faellig = min(b['date'] for b in soll_buchungen)
-        else:
-            return 0.0
+            buchungsdaten = []
+            for b in soll_buchungen:
+                d = parse_date_flexible(b.get('date'))
+                if d:
+                    buchungsdaten.append(d)
+            if buchungsdaten:
+                faellig = min(buchungsdaten)
 
-    # Sicherstellen, dass faellig ein date-Objekt ist
-    if isinstance(faellig, datetime):
-        faellig = faellig.date()
+    if not faellig:
+        # Fallback: 60 Tage zurück
+        faellig = date.today() - timedelta(days=60)
 
     # Tage seit Fälligkeit
     heute = date.today()
@@ -600,21 +625,58 @@ def calculate_interest_for_case(case, bookings):
 
     # Hauptforderung ermitteln
     hauptforderung = case.get('principal', 0)
+    if hauptforderung is None:
+        hauptforderung = 0
+
     if hauptforderung == 0:
         # Versuche aus Buchungen zu ermitteln
         for b in bookings:
-            if b['type'] == 'S' and b.get('cat') in ['Hauptforderung', 'Rechnung', 'Kaufpreis', 'Mietrückstand']:
-                hauptforderung += b['amount']
+            if b.get('type') == 'S' and b.get('cat') in ['Hauptforderung', 'Rechnung', 'Kaufpreis', 'Mietrückstand']:
+                hauptforderung += b.get('amount', 0)
 
-    # Zahlungen abziehen (chronologisch berücksichtigen)
-    zahlungen = sum(b['amount'] for b in bookings if b['type'] == 'H')
+    # Zahlungen abziehen
+    zahlungen = sum(b.get('amount', 0) for b in bookings if b.get('type') == 'H')
     offene_forderung = max(0, hauptforderung - zahlungen)
 
-    # Einfache Zinsberechnung: Hauptforderung * (Zinssatz/100) * (Tage/365)
-    # Für genauere Berechnung müsste man Teilzahlungen chronologisch berücksichtigen
+    # Zinsberechnung: Hauptforderung * (Zinssatz/100) * (Tage/365)
     zinsen = offene_forderung * (zinssatz / 100) * (verzugstage / 365)
 
     return round(zinsen, 2)
+
+
+def get_interest_details(case, bookings):
+    """Gibt detaillierte Zinsinformationen zurück für die Anzeige."""
+    zinssatz = case.get('interest', 5.0) or 5.0
+    faellig = parse_date_flexible(case.get('due_date'))
+
+    if not faellig:
+        soll_buchungen = [b for b in bookings if b.get('type') == 'S']
+        if soll_buchungen:
+            buchungsdaten = [parse_date_flexible(b.get('date')) for b in soll_buchungen]
+            buchungsdaten = [d for d in buchungsdaten if d]
+            if buchungsdaten:
+                faellig = min(buchungsdaten)
+
+    if not faellig:
+        faellig = date.today() - timedelta(days=60)
+
+    heute = date.today()
+    verzugstage = max(0, (heute - faellig).days)
+
+    hauptforderung = case.get('principal', 0) or 0
+    zahlungen = sum(b.get('amount', 0) for b in bookings if b.get('type') == 'H')
+    offene_forderung = max(0, hauptforderung - zahlungen)
+
+    zinsen = calculate_interest_for_case(case, bookings)
+
+    return {
+        'zinssatz': zinssatz,
+        'faellig_seit': faellig,
+        'verzugstage': verzugstage,
+        'offene_forderung': offene_forderung,
+        'zinsen': zinsen,
+        'berechnung': f"{fmt_curr(offene_forderung)} × {zinssatz}% × {verzugstage}/365 = {fmt_curr(zinsen)}"
+    }
 
 def logout():
     st.session_state.authenticated = False
@@ -886,19 +948,78 @@ DEMO_DOCUMENTS = {
 }
 
 def generate_demo_pdf(doc_name, case_nr):
-    """Generiert ein einfaches Demo-PDF"""
-    # Einfacher PDF-Inhalt (minimales gültiges PDF)
-    content = f"""Dokument: {doc_name}
+    """Generiert ein echtes Demo-PDF mit PyPDF2"""
+    try:
+        from PyPDF2 import PdfWriter
+        from PyPDF2.generic import NameObject, ArrayObject, NumberObject, TextStringObject, DictionaryObject
+
+        # Erstelle ein minimales gültiges PDF
+        writer = PdfWriter()
+
+        # Füge eine leere Seite hinzu (A4 Format)
+        page = writer.add_blank_page(width=595, height=842)
+
+        # PDF in Bytes konvertieren
+        output = io.BytesIO()
+        writer.write(output)
+        output.seek(0)
+
+        return output.getvalue()
+    except Exception as e:
+        # Fallback: Minimales gültiges PDF manuell erstellen
+        content = f"""Dokument: {doc_name}
 Akte: {case_nr}
 Datum: {fmt_date(date.today())}
 
 Dies ist ein Demo-Dokument der InkassoKom-Plattform.
-
-----------------------------------------
-Dieses Dokument dient nur zu Demonstrationszwecken.
-----------------------------------------
 """
-    return content.encode('utf-8')
+        # Minimales PDF mit Text
+        pdf_content = f"""%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 200 >>
+stream
+BT
+/F1 16 Tf
+50 750 Td
+(InkassoKom - Demo-Dokument) Tj
+0 -30 Td
+/F1 12 Tf
+(Dokument: {doc_name.replace('(', '').replace(')', '')}) Tj
+0 -20 Td
+(Akte: {case_nr}) Tj
+0 -20 Td
+(Datum: {fmt_date(date.today())}) Tj
+0 -40 Td
+(Dies ist ein Demo-Dokument.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000266 00000 n
+0000000518 00000 n
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+595
+%%EOF"""
+        return pdf_content.encode('latin-1')
 
 def show_document_viewer(doc, case_nr, key_prefix):
     """Zeigt Dokumentenoptionen: Ansehen, Herunterladen, Teilen"""
@@ -2774,20 +2895,37 @@ def show_case_detail():
             st.session_state.imported_bookings[case_id].extend(default_bookings)
             bookings = default_bookings
 
-        # Zinsen berechnen und aktualisieren
-        zinsen_berechnet = calculate_interest_for_case(case, bookings)
+        # Zinsen berechnen mit Details
+        zinsen_details = get_interest_details(case, bookings)
+        zinsen_berechnet = zinsen_details['zinsen']
 
         # Übersicht mit aktualisierten Werten
-        total_soll = sum(b['amount'] for b in bookings if b['type'] == 'S')
-        total_haben = sum(b['amount'] for b in bookings if b['type'] == 'H')
+        total_soll = sum(b.get('amount', 0) for b in bookings if b.get('type') == 'S')
+        total_haben = sum(b.get('amount', 0) for b in bookings if b.get('type') == 'H')
         total_offen = total_soll + zinsen_berechnet - total_haben
 
         # Metriken in 4 Spalten
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("📊 Hauptforderung", fmt_curr(case.get('principal', 0)))
+        c1.metric("📊 Hauptforderung", fmt_curr(case.get('principal', 0) or 0))
         c2.metric("📈 Zinsen (aktuell)", fmt_curr(zinsen_berechnet))
         c3.metric("💳 Zahlungen", fmt_curr(total_haben))
         c4.metric("💰 Offen gesamt", fmt_curr(total_offen))
+
+        # Zinsdetails anzeigen
+        with st.expander("📈 Zinsberechnung Details", expanded=zinsen_berechnet > 0):
+            zi_c1, zi_c2 = st.columns(2)
+            with zi_c1:
+                st.write(f"**Zinssatz:** {zinsen_details['zinssatz']}% p.a.")
+                st.write(f"**Fällig seit:** {fmt_date(zinsen_details['faellig_seit'])}")
+                st.write(f"**Verzugstage:** {zinsen_details['verzugstage']} Tage")
+            with zi_c2:
+                st.write(f"**Offene Forderung:** {fmt_curr(zinsen_details['offene_forderung'])}")
+                st.write(f"**Berechnete Zinsen:** {fmt_curr(zinsen_berechnet)}")
+
+            st.info(f"📐 Berechnung: {zinsen_details['berechnung']}")
+
+            if zinsen_berechnet == 0:
+                st.warning("⚠️ Keine Zinsen berechnet. Mögliche Gründe: Forderung noch nicht fällig, vollständig bezahlt, oder kein Fälligkeitsdatum gesetzt.")
 
         st.divider()
 
@@ -3210,7 +3348,7 @@ def show_settings():
     """Einstellungen für API-Keys und Benachrichtigungen"""
     st.markdown("## ⚙️ Einstellungen")
 
-    tab1, tab2, tab3 = st.tabs(["🤖 KI-Integration", "🔔 Benachrichtigungen", "👤 Profil"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🤖 KI-Integration", "🔔 Benachrichtigungen", "👤 Profil", "🔧 Debug"])
 
     with tab1:
         st.markdown("### OpenAI API-Schlüssel")
@@ -3292,6 +3430,168 @@ def show_settings():
         st.markdown("### Kanzlei")
         st.text_input("Kanzleiname", value="Kanzlei Müller & Partner")
         st.text_area("Adresse", value="Musterstraße 123\n10115 Berlin")
+
+    with tab4:
+        st.markdown("### 🔧 Debug & System-Status")
+        st.caption("Diese Seite zeigt den Status aller Systemkomponenten und hilft bei der Fehlersuche.")
+
+        # ============= DATENBANK STATUS =============
+        st.markdown("#### 🗄️ Datenbank")
+
+        if DB_AVAILABLE:
+            try:
+                db_status = get_db_status()
+
+                db_col1, db_col2 = st.columns(2)
+
+                with db_col1:
+                    if db_status['database']['connected']:
+                        st.success(f"✅ PostgreSQL verbunden")
+                        st.write(f"**Host:** {db_status['database']['host']}")
+                        st.write(f"**Datenbank:** {db_status['database']['database']}")
+                    elif db_status['database']['configured']:
+                        st.error(f"❌ Verbindungsfehler")
+                        st.write(f"**Fehler:** {db_status['database']['message']}")
+                    else:
+                        st.warning("⚠️ Supabase nicht konfiguriert")
+                        st.write("**Modus:** SQLite (lokal)")
+                        st.caption("Konfigurieren Sie Supabase in den Streamlit Secrets")
+
+                with db_col2:
+                    st.write("**Erforderliche Secrets:**")
+                    st.code("""[supabase]
+host = "db.xxx.supabase.co"
+port = 5432
+database = "postgres"
+user = "postgres"
+password = "xxx" """, language="toml")
+
+            except Exception as e:
+                st.error(f"❌ Datenbankfehler: {str(e)}")
+        else:
+            st.warning("⚠️ Datenbank-Modul nicht geladen")
+            st.caption("Die Datenbank-Integration ist nicht verfügbar.")
+
+        st.divider()
+
+        # ============= REDIS CACHE STATUS =============
+        st.markdown("#### ⚡ Redis Cache")
+
+        if DB_AVAILABLE:
+            try:
+                from src.database.cache import get_cache, cache_enabled
+
+                cache = get_cache()
+                if cache.is_connected:
+                    stats = cache.get_stats()
+                    st.success("✅ Redis Cache verbunden")
+
+                    cache_col1, cache_col2, cache_col3 = st.columns(3)
+                    cache_col1.metric("Keys", stats.get('total_keys', 0))
+                    cache_col2.metric("Speicher", stats.get('used_memory', 'N/A'))
+                    cache_col3.metric("Clients", stats.get('connected_clients', 0))
+                else:
+                    st.warning("⚠️ Redis nicht verbunden")
+                    st.caption("Cache ist deaktiviert. Die App funktioniert, aber langsamer.")
+
+                    st.write("**Erforderliche Secrets:**")
+                    st.code("""[redis]
+url = "redis://default:password@host:6379" """, language="toml")
+
+            except Exception as e:
+                st.error(f"❌ Cache-Fehler: {str(e)}")
+        else:
+            st.info("ℹ️ Cache-Modul nicht geladen")
+
+        st.divider()
+
+        # ============= OPENAI STATUS =============
+        st.markdown("#### 🤖 OpenAI API")
+
+        if st.session_state.openai_api_key:
+            st.success("✅ API-Key konfiguriert")
+
+            source = "Streamlit Secrets" if st.session_state.get('openai_api_key_from_secrets', False) else "Manuell eingegeben"
+            st.write(f"**Quelle:** {source}")
+
+            masked_key = st.session_state.openai_api_key[:7] + "..." + st.session_state.openai_api_key[-4:] if len(st.session_state.openai_api_key) > 15 else "***"
+            st.write(f"**Key:** {masked_key}")
+
+            # Test-Button
+            if st.button("🧪 API testen"):
+                with st.spinner("Teste OpenAI API..."):
+                    try:
+                        from openai import OpenAI
+                        client = OpenAI(api_key=st.session_state.openai_api_key)
+                        response = client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=[{"role": "user", "content": "Sag nur 'OK'"}],
+                            max_tokens=5
+                        )
+                        st.success(f"✅ API funktioniert! Antwort: {response.choices[0].message.content}")
+                    except Exception as e:
+                        st.error(f"❌ API-Fehler: {str(e)}")
+        else:
+            st.warning("⚠️ Kein OpenAI API-Key")
+            st.caption("KI-Funktionen nutzen Template-basierte Antworten.")
+
+        st.divider()
+
+        # ============= SESSION STATE DEBUG =============
+        st.markdown("#### 📦 Session State")
+
+        with st.expander("Session State anzeigen"):
+            debug_state = {
+                'authenticated': st.session_state.get('authenticated', False),
+                'user': st.session_state.get('user'),
+                'page': st.session_state.get('page'),
+                'selected_case': st.session_state.get('selected_case'),
+                'imported_cases_count': len(st.session_state.get('imported_cases', [])),
+                'imported_documents_count': len(st.session_state.get('imported_documents', {})),
+                'document_pdfs_count': len(st.session_state.get('document_pdfs', {})),
+                'case_full_pdfs_count': len(st.session_state.get('case_full_pdfs', {})),
+                'openai_api_key_set': bool(st.session_state.get('openai_api_key')),
+            }
+            st.json(debug_state)
+
+        st.divider()
+
+        # ============= SYSTEM INFO =============
+        st.markdown("#### ℹ️ System-Information")
+
+        import sys
+        import platform
+
+        sys_col1, sys_col2 = st.columns(2)
+        with sys_col1:
+            st.write(f"**App-Version:** {APP_VERSION}")
+            st.write(f"**Python:** {sys.version.split()[0]}")
+            st.write(f"**Plattform:** {platform.system()} {platform.release()}")
+        with sys_col2:
+            st.write(f"**Streamlit:** {st.__version__}")
+            st.write(f"**DB-Modul:** {'Geladen' if DB_AVAILABLE else 'Nicht verfügbar'}")
+
+        st.divider()
+
+        # ============= FEHLER-LOG =============
+        st.markdown("#### 📋 Letzte Fehler")
+
+        if 'error_log' not in st.session_state:
+            st.session_state.error_log = []
+
+        if st.session_state.error_log:
+            for err in st.session_state.error_log[-10:]:  # Letzte 10 Fehler
+                st.error(f"{err['time']}: {err['message']}")
+            if st.button("🗑️ Fehler-Log löschen"):
+                st.session_state.error_log = []
+                st.rerun()
+        else:
+            st.info("✅ Keine Fehler protokolliert")
+
+        # Button zum Testen
+        st.divider()
+        if st.button("🔄 Status aktualisieren"):
+            st.rerun()
 
 def show_dunning():
     st.markdown("## ⚖️ Mahnverfahren")
