@@ -3442,29 +3442,66 @@ def show_settings():
             try:
                 db_status = get_db_status()
 
-                db_col1, db_col2 = st.columns(2)
-
-                with db_col1:
-                    if db_status['database']['connected']:
-                        st.success(f"✅ PostgreSQL verbunden")
+                if db_status['database']['connected']:
+                    st.success(f"✅ PostgreSQL verbunden")
+                    db_col1, db_col2 = st.columns(2)
+                    with db_col1:
                         st.write(f"**Host:** {db_status['database']['host']}")
                         st.write(f"**Datenbank:** {db_status['database']['database']}")
-                    elif db_status['database']['configured']:
-                        st.error(f"❌ Verbindungsfehler")
-                        st.write(f"**Fehler:** {db_status['database']['message']}")
-                    else:
-                        st.warning("⚠️ Supabase nicht konfiguriert")
-                        st.write("**Modus:** SQLite (lokal)")
-                        st.caption("Konfigurieren Sie Supabase in den Streamlit Secrets")
+                    with db_col2:
+                        st.write(f"**Modus:** {db_status['database'].get('mode', 'Verbunden')}")
 
-                with db_col2:
-                    st.write("**Erforderliche Secrets:**")
+                elif db_status['database']['configured']:
+                    st.error(f"❌ Verbindungsfehler")
+                    st.write(f"**Fehler:** {db_status['database']['message']}")
+
+                    # Hilfestellung bei häufigen Fehlern
+                    error_msg = db_status['database']['message'].lower()
+
+                    if "tenant or user not found" in error_msg:
+                        st.warning("""
+                        **Häufige Ursache:** Bei Supabase Pooler (Port 6543) muss der Benutzername
+                        das Format `postgres.[PROJECT-REF]` haben.
+
+                        **Lösung:** Verwenden Sie die vollständige Database URL aus dem Supabase Dashboard:
+                        1. Supabase Dashboard → Project Settings → Database
+                        2. Connection string → URI kopieren
+                        3. In Streamlit Secrets einfügen als:
+                        """)
+                        st.code("""[supabase]
+url = "postgresql://postgres.abcdef123456:IhrPasswort@aws-0-eu-west-2.pooler.supabase.com:6543/postgres" """, language="toml")
+
+                    elif "password authentication failed" in error_msg:
+                        st.warning("**Häufige Ursache:** Falsches Passwort oder Sonderzeichen nicht URL-kodiert.")
+
+                    elif "could not connect" in error_msg or "connection refused" in error_msg:
+                        st.warning("**Häufige Ursache:** Host oder Port falsch, oder Firewall blockiert.")
+
+                else:
+                    st.warning("⚠️ Supabase nicht konfiguriert")
+                    st.write("**Modus:** SQLite (lokal)")
+                    st.caption("Konfigurieren Sie Supabase in den Streamlit Secrets")
+
+                # Konfigurationshinweis
+                with st.expander("📖 Supabase Konfiguration"):
+                    st.markdown("""
+                    **Empfohlene Methode: Vollständige URL**
+
+                    1. Öffnen Sie das Supabase Dashboard
+                    2. Gehen Sie zu **Project Settings** → **Database**
+                    3. Kopieren Sie den **Connection string** (URI)
+                    4. Fügen Sie ihn in Ihre Streamlit Secrets ein:
+                    """)
                     st.code("""[supabase]
-host = "db.xxx.supabase.co"
-port = 5432
-database = "postgres"
-user = "postgres"
-password = "xxx" """, language="toml")
+url = "postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres" """, language="toml")
+
+                    st.markdown("""
+                    **Wichtige Hinweise:**
+                    - Ersetzen Sie `[YOUR-PASSWORD]` mit Ihrem tatsächlichen Passwort
+                    - Bei Sonderzeichen im Passwort: URL-kodieren (z.B. `@` → `%40`)
+                    - Port 6543 = Transaction Pooler (empfohlen)
+                    - Port 5432 = Session Pooler
+                    """)
 
             except Exception as e:
                 st.error(f"❌ Datenbankfehler: {str(e)}")

@@ -5,6 +5,7 @@ import os
 from typing import Generator, Optional
 from contextlib import contextmanager
 from dataclasses import dataclass
+from urllib.parse import urlparse, quote_plus
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
@@ -23,12 +24,14 @@ class DatabaseConfig:
     """Database configuration from environment or Streamlit secrets."""
     host: str = "localhost"
     port: int = 5432
-    database: str = "inkassokom"
+    database: str = "postgres"
     user: str = "postgres"
     password: str = ""
     pool_size: int = 5
     max_overflow: int = 10
     ssl_mode: str = "require"
+    # Direct URL takes precedence if provided
+    url: str = ""
 
     @classmethod
     def from_streamlit_secrets(cls) -> "DatabaseConfig":
@@ -37,10 +40,31 @@ class DatabaseConfig:
             return cls.from_environment()
 
         try:
-            secrets = st.secrets.get("supabase", {})
-            if not secrets:
-                # Try alternate key names
-                secrets = st.secrets.get("database", {})
+            # First check for direct URL (recommended for Supabase)
+            # Check multiple possible secret locations
+            url = None
+
+            # Try [supabase] section
+            supabase_secrets = st.secrets.get("supabase", {})
+            if supabase_secrets:
+                url = supabase_secrets.get("url") or supabase_secrets.get("database_url")
+
+            # Try [database] section
+            if not url:
+                db_secrets = st.secrets.get("database", {})
+                if db_secrets:
+                    url = db_secrets.get("url") or db_secrets.get("database_url")
+
+            # Try top-level DATABASE_URL
+            if not url:
+                url = st.secrets.get("DATABASE_URL") or st.secrets.get("database_url")
+
+            # If URL found, use it directly
+            if url:
+                return cls(url=url)
+
+            # Fall back to individual parameters
+            secrets = supabase_secrets or st.secrets.get("database", {})
 
             if secrets:
                 return cls(
@@ -53,38 +77,26 @@ class DatabaseConfig:
                     max_overflow=int(secrets.get("max_overflow", 10)),
                     ssl_mode=secrets.get("ssl_mode", "require")
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            # Log the error for debugging
+            print(f"Error loading database secrets: {e}")
 
         return cls.from_environment()
 
     @classmethod
     def from_environment(cls) -> "DatabaseConfig":
         """Load configuration from environment variables."""
+        # Check for direct URL first
         database_url = os.getenv("DATABASE_URL", "")
 
-        if database_url and database_url.startswith("postgresql"):
-            # Parse DATABASE_URL
-            # Format: postgresql://user:password@host:port/database
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(database_url)
-                return cls(
-                    host=parsed.hostname or "localhost",
-                    port=parsed.port or 5432,
-                    database=parsed.path.lstrip('/') or "inkassokom",
-                    user=parsed.username or "postgres",
-                    password=parsed.password or "",
-                    ssl_mode=os.getenv("DATABASE_SSL_MODE", "require")
-                )
-            except Exception:
-                pass
+        if database_url:
+            return cls(url=database_url)
 
         # Fallback to individual env vars
         return cls(
             host=os.getenv("SUPABASE_HOST", os.getenv("DB_HOST", "localhost")),
             port=int(os.getenv("SUPABASE_PORT", os.getenv("DB_PORT", "5432"))),
-            database=os.getenv("SUPABASE_DB", os.getenv("DB_NAME", "inkassokom")),
+            database=os.getenv("SUPABASE_DB", os.getenv("DB_NAME", "postgres")),
             user=os.getenv("SUPABASE_USER", os.getenv("DB_USER", "postgres")),
             password=os.getenv("SUPABASE_PASSWORD", os.getenv("DB_PASSWORD", "")),
             pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
@@ -95,12 +107,23 @@ class DatabaseConfig:
     @property
     def connection_string(self) -> str:
         """Generate SQLAlchemy connection string."""
+        # If direct URL provided, use it
+        if self.url:
+            return self.url
+
+        # Build connection string from components
+        # URL-encode the password to handle special characters
+        encoded_password = quote_plus(self.password) if self.password else ""
         ssl_args = f"?sslmode={self.ssl_mode}" if self.ssl_mode else ""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}{ssl_args}"
+        return f"postgresql://{self.user}:{encoded_password}@{self.host}:{self.port}/{self.database}{ssl_args}"
 
     @property
     def is_configured(self) -> bool:
         """Check if database is properly configured."""
+        # If URL is provided, it's configured
+        if self.url:
+            return True
+        # Otherwise check individual parameters
         return bool(self.host and self.password and self.host != "localhost")
 
 
@@ -217,9 +240,35 @@ def test_connection() -> tuple[bool, str]:
 def get_connection_info() -> dict:
     """Get connection information for display."""
     config = DatabaseConfig.from_streamlit_secrets()
+
+    if config.url:
+        # Parse URL to extract host info (without exposing password)
+        try:
+            parsed = urlparse(config.url)
+            return {
+                "configured": True,
+                "mode": "URL",
+                "host": parsed.hostname or "unknown",
+                "port": parsed.port or 5432,
+                "database": parsed.path.lstrip('/') or "postgres",
+                "user": parsed.username or "unknown",
+                "ssl": "from URL"
+            }
+        except Exception:
+            return {
+                "configured": True,
+                "mode": "URL",
+                "host": "URL konfiguriert",
+                "database": "postgres",
+                "ssl": "from URL"
+            }
+
     return {
         "configured": config.is_configured,
+        "mode": "Parameter",
         "host": config.host if config.is_configured else "SQLite (lokal)",
+        "port": config.port,
         "database": config.database if config.is_configured else "inkassokom.db",
+        "user": config.user,
         "ssl": config.ssl_mode if config.is_configured else "N/A"
     }
