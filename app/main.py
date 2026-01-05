@@ -15,6 +15,21 @@ import io
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Database Integration (optional - falls Supabase konfiguriert)
+try:
+    from src.database.streamlit_db import (
+        is_database_configured,
+        get_db_status,
+        show_db_status_widget,
+        db_get_all_cases,
+        db_get_case,
+        db_get_documents,
+        db_get_bookings
+    )
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+
 st.set_page_config(
     page_title="InkassoKom - Inkasso-Plattform",
     page_icon="⚖️",
@@ -416,31 +431,57 @@ def generate_document_from_template(case, template_key='briefkopf_docx'):
     return replace_placeholders_in_docx(template_bytes, placeholders)
 
 def get_all_cases():
-    """Gibt alle Akten zurück (Demo + importierte)"""
+    """Gibt alle Akten zurück (Datenbank oder Demo + importierte)"""
+    # Versuche zuerst Datenbank
+    if DB_AVAILABLE and is_database_configured():
+        try:
+            db_cases = db_get_all_cases()
+            if db_cases:
+                return db_cases
+        except Exception:
+            pass  # Fallback zu Demo-Daten
+
+    # Fallback: Demo + importierte Akten
     all_cases = DEMO_CASES.copy()
-    # Importierte Akten hinzufügen (falls nicht bereits vorhanden)
     for imp_case in st.session_state.get('imported_cases', []):
         if not any(c['id'] == imp_case['id'] for c in all_cases):
             all_cases.append(imp_case)
     return all_cases
 
 def get_all_documents(case_id):
-    """Gibt alle Dokumente einer Akte zurück (Demo + importierte)"""
+    """Gibt alle Dokumente einer Akte zurück (Datenbank oder Demo + importierte)"""
+    # Versuche zuerst Datenbank
+    if DB_AVAILABLE and is_database_configured():
+        try:
+            db_docs = db_get_documents(case_id)
+            if db_docs:
+                return db_docs
+        except Exception:
+            pass
+
+    # Fallback: Demo + importierte Dokumente
     docs = DEMO_DOCUMENTS.get(case_id, []).copy()
-    # Importierte Dokumente hinzufügen
     imp_docs = st.session_state.get('imported_documents', {}).get(case_id, [])
     for imp_doc in imp_docs:
         if not any(d['id'] == imp_doc['id'] for d in docs):
-            # Kategorie hinzufügen falls nicht vorhanden
             if 'category' not in imp_doc:
                 imp_doc['category'] = get_document_category(imp_doc.get('type', ''))
             docs.append(imp_doc)
     return docs
 
 def get_all_bookings(case_id):
-    """Gibt alle Buchungen einer Akte zurück (Demo + importierte)"""
+    """Gibt alle Buchungen einer Akte zurück (Datenbank oder Demo + importierte)"""
+    # Versuche zuerst Datenbank
+    if DB_AVAILABLE and is_database_configured():
+        try:
+            db_bookings = db_get_bookings(case_id)
+            if db_bookings:
+                return db_bookings
+        except Exception:
+            pass
+
+    # Fallback: Demo + importierte Buchungen
     bookings = DEMO_BOOKINGS.get(case_id, []).copy()
-    # Importierte Buchungen hinzufügen
     imp_bookings = st.session_state.get('imported_bookings', {}).get(case_id, [])
     for imp_b in imp_bookings:
         if imp_b not in bookings:
@@ -2225,6 +2266,10 @@ def lawyer_dashboard():
         if st.button("🚪 Abmelden", use_container_width=True):
             logout()
             st.rerun()
+
+        # Datenbank-Status anzeigen
+        if DB_AVAILABLE:
+            show_db_status_widget()
 
     page = st.session_state.page
     if page == 'cases': show_cases_list()
