@@ -1,0 +1,10 @@
+# System packages for Streamlit Cloud
+# These are installed via apt-get before Python packages
+
+# Tesseract OCR for scanned document recognition
+tesseract-ocr
+tesseract-ocr-deu
+
+# MuPDF dependencies (for pymupdf)
+libmupdf-dev
+mupdf-tools
