@@ -1,0 +1,3 @@
+"""
+InkassoKom - Source Package
+"""
