@@ -30,6 +30,17 @@ try:
 except ImportError:
     DB_AVAILABLE = False
 
+# PDF Splitter Integration (intelligente Dokumententrennung)
+try:
+    from src.pdf_splitter import (
+        PDFSplitter,
+        split_pdf_intelligent,
+        get_splitter_capabilities
+    )
+    PDF_SPLITTER_AVAILABLE = True
+except ImportError:
+    PDF_SPLITTER_AVAILABLE = False
+
 st.set_page_config(
     page_title="InkassoKom - Inkasso-Plattform",
     page_icon="⚖️",
@@ -2010,6 +2021,190 @@ def show_ra_micro_import():
                 </iframe>
                 '''
                 st.markdown(pdf_display, unsafe_allow_html=True)
+
+            st.divider()
+
+            # =====================================================================
+            # INTELLIGENTE DOKUMENTENTRENNUNG (OCR + Heuristik)
+            # =====================================================================
+            st.markdown("#### 🧠 Intelligente Dokumententrennung")
+
+            if PDF_SPLITTER_AVAILABLE:
+                capabilities = get_splitter_capabilities()
+
+                cap_cols = st.columns(3)
+                with cap_cols[0]:
+                    if capabilities['pymupdf']:
+                        st.success("✅ PyMuPDF verfügbar")
+                    else:
+                        st.warning("⚠️ PyMuPDF nicht installiert")
+                with cap_cols[1]:
+                    if capabilities['ocr']:
+                        st.success("✅ OCR verfügbar")
+                    else:
+                        st.info("ℹ️ OCR nicht verfügbar")
+                with cap_cols[2]:
+                    if capabilities['full_support']:
+                        st.success("✅ Volle Unterstützung")
+                    else:
+                        st.info("ℹ️ Basis-Modus")
+
+                st.info("""
+                **Intelligente Trennung** erkennt Dokumente automatisch anhand von:
+                - 📑 PDF-Bookmarks (falls vorhanden)
+                - 📝 Textmustern (Mahnbescheid, Rechnung, Vollstreckungsbescheid, etc.)
+                - 🔍 OCR für gescannte Dokumente
+                - 📄 "Seite 1" Markierungen
+                """)
+
+                # Einstellungen für intelligente Trennung
+                with st.expander("⚙️ Trennungseinstellungen"):
+                    split_mode = st.selectbox(
+                        "Trennungsmodus",
+                        options=["auto", "heuristic", "bookmarks"],
+                        format_func=lambda x: {
+                            "auto": "🔄 Automatisch (Bookmarks → Heuristik)",
+                            "heuristic": "🧠 Nur Heuristik (Textmuster + OCR)",
+                            "bookmarks": "📑 Nur Bookmarks"
+                        }.get(x, x),
+                        help="Wählen Sie die Methode zur Dokumenttrennung"
+                    )
+
+                    use_ocr = st.checkbox(
+                        "🔍 OCR für gescannte Seiten verwenden",
+                        value=capabilities['ocr'],
+                        disabled=not capabilities['ocr'],
+                        help="Aktiviert Texterkennung für Seiten ohne eingebetteten Text"
+                    )
+
+                # Intelligente Trennung durchführen
+                if st.button("🚀 Intelligente Trennung starten", type="primary"):
+                    with st.spinner("🔄 Analysiere Dokumente mit KI..."):
+                        try:
+                            splitter = PDFSplitter(use_ocr=use_ocr)
+                            segments = splitter.split(pdf_bytes, mode=split_mode)
+
+                            # In Session State speichern
+                            st.session_state.intelligent_segments = segments
+                            st.session_state.intelligent_split_done = True
+                            st.success(f"✅ {len(segments)} Dokumente erkannt!")
+
+                        except Exception as e:
+                            st.error(f"❌ Fehler bei der Analyse: {str(e)}")
+                            st.session_state.intelligent_split_done = False
+
+                # Ergebnisse anzeigen
+                if st.session_state.get('intelligent_split_done', False):
+                    segments = st.session_state.get('intelligent_segments', [])
+
+                    st.markdown("##### 📋 Erkannte Dokumente")
+
+                    # Konfidenz-Legende
+                    st.caption("🟢 Hohe Konfidenz | 🟡 Mittlere Konfidenz | 🔴 Niedrige Konfidenz | 🔍 = OCR verwendet")
+
+                    for idx, seg in enumerate(segments):
+                        conf_color = "🟢" if seg.confidence >= 0.9 else ("🟡" if seg.confidence >= 0.7 else "🔴")
+                        ocr_indicator = " 🔍" if seg.ocr_used else ""
+
+                        with st.expander(f"{conf_color} **{seg.title}**{ocr_indicator} (Seiten {seg.start_page}-{seg.end_page})"):
+                            seg_cols = st.columns([2, 2, 1])
+                            with seg_cols[0]:
+                                st.write(f"**Typ:** {seg.label}")
+                                st.write(f"**Kategorie:** {seg.category}")
+                            with seg_cols[1]:
+                                st.write(f"**Seiten:** {seg.start_page} - {seg.end_page}")
+                                st.write(f"**Anzahl:** {seg.pages} Seiten")
+                            with seg_cols[2]:
+                                st.write(f"**Konfidenz:** {seg.confidence:.0%}")
+                                if seg.ocr_used:
+                                    st.caption("OCR verwendet")
+
+                            # Titel editieren
+                            new_title = st.text_input(
+                                "Titel anpassen",
+                                value=seg.title,
+                                key=f"seg_title_{idx}"
+                            )
+                            if new_title != seg.title:
+                                segments[idx].title = new_title
+                                st.session_state.intelligent_segments = segments
+
+                    st.divider()
+
+                    # Import mit intelligenter Trennung
+                    if st.button("✅ Mit intelligenter Trennung importieren", type="primary", key="import_intelligent"):
+                        try:
+                            # Neue Akte erstellen
+                            new_case_id = f"imp-{len(st.session_state.imported_cases) + 1:03d}"
+
+                            new_case = {
+                                'id': new_case_id,
+                                'nr': result['aktenzeichen'],
+                                'creditor': result['creditor'],
+                                'debtor': result['debtor'],
+                                'creditor_address': result.get('creditor_address', ''),
+                                'debtor_address': result.get('debtor_address', ''),
+                                'subject': f'Import aus RA-Micro - {uploaded_pdf.name}',
+                                'status': result['status'],
+                                'dunning': result['dunning'],
+                                'enforcement': result['enforcement'],
+                                'principal': result['principal'],
+                                'interest': 5.0,
+                                'due_date': date.today() - timedelta(days=60),
+                                'created': datetime.now(),
+                                'imported': True,
+                                'source_pdf': uploaded_pdf.name,
+                                'contract_type': 'Importiert',
+                                'contract_date': date.today() - timedelta(days=90),
+                                'invoice_nr': f'IMP-{new_case_id}',
+                                'invoice_date': date.today() - timedelta(days=60),
+                                'leistung': 'Aus RA-Micro Import',
+                                'mahnung_dates': [],
+                            }
+
+                            st.session_state.imported_cases.append(new_case)
+                            DEMO_CASES.append(new_case)
+
+                            # Dokumente aus intelligenter Trennung erstellen
+                            splitter = PDFSplitter(use_ocr=use_ocr)
+                            documents_to_import = []
+                            doc_pdfs = {}
+
+                            for idx, seg in enumerate(segments, start=1):
+                                doc_id = f"{new_case_id}-doc-{idx:03d}"
+                                doc_dict = seg.to_document_dict(doc_id)
+                                documents_to_import.append(doc_dict)
+
+                                # PDF extrahieren
+                                doc_pdf = splitter.extract_segment(pdf_bytes, seg)
+                                doc_pdfs[doc_id] = doc_pdf
+                                st.session_state.document_pdfs[doc_id] = doc_pdf
+
+                            st.session_state.imported_documents[new_case_id] = documents_to_import
+                            DEMO_DOCUMENTS[new_case_id] = documents_to_import
+
+                            # Gesamt-PDF speichern
+                            st.session_state.case_full_pdfs[new_case_id] = pdf_bytes
+
+                            # Buchungen
+                            st.session_state.imported_bookings[new_case_id] = result['bookings']
+                            DEMO_BOOKINGS[new_case_id] = result['bookings']
+
+                            # Session State bereinigen
+                            st.session_state.intelligent_split_done = False
+                            st.session_state.intelligent_segments = []
+
+                            st.success(f"✅ Akte {result['aktenzeichen']} mit {len(doc_pdfs)} intelligent getrennten Dokumenten importiert!")
+                            st.balloons()
+
+                            st.session_state.page = 'cases'
+                            st.rerun()
+
+                        except Exception as e:
+                            st.error(f"❌ Import fehlgeschlagen: {str(e)}")
+
+            else:
+                st.warning("⚠️ Intelligente PDF-Trennung nicht verfügbar. Bitte installieren Sie `pymupdf` und `pytesseract`.")
 
             st.divider()
 

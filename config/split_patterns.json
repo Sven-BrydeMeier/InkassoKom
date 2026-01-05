@@ -1,0 +1,97 @@
+[
+  {
+    "label": "Mahnbescheid-Antrag",
+    "regex": "antrag\\s+auf\\s+erlass\\s+eines\\s+mahnbescheids",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "Mahngericht-Mitteilung",
+    "regex": "mitteilung\\s+des\\s+mahngerichts",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "Vollstreckungsbescheid-Antrag",
+    "regex": "antrag\\s+auf\\s+erlass\\s+eines\\s+vollstreckungsbescheides",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "Vollstreckungsbescheid",
+    "regex": "vollstreckungsbescheid|\\bamtsgericht\\b.*\\bbescheid\\b",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "Mahnbescheid",
+    "regex": "\\bmahnbescheid\\b",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "PfÜB",
+    "regex": "pfändungs.*überweisungsbeschluss|pf[uü]b",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "Zustellungsurkunde",
+    "regex": "zustellungsurkunde|zustellung.*urkunde",
+    "category": "gerichtlich"
+  },
+  {
+    "label": "Anwaltsschreiben",
+    "regex": "rechtsanw[aä]lt|kanzlei|anwaltskanzlei",
+    "category": "aussergerichtlich"
+  },
+  {
+    "label": "Mahnung",
+    "regex": "\\bmahnung\\b|\\d\\.\\s*mahnung|zahlungserinnerung",
+    "category": "aussergerichtlich"
+  },
+  {
+    "label": "Rechnung",
+    "regex": "\\b(rechnungs[-\\s]?nr|rechnung\\s+nummer|rechnungsdatum)\\b",
+    "category": "aussergerichtlich"
+  },
+  {
+    "label": "Lieferschein",
+    "regex": "\\blieferschein\\b",
+    "category": "aussergerichtlich"
+  },
+  {
+    "label": "Vertrag",
+    "regex": "\\bvertrag\\b|\\bvereinbarung\\b",
+    "category": "aussergerichtlich"
+  },
+  {
+    "label": "Vollmacht",
+    "regex": "\\bvollmacht\\b",
+    "category": "mandant"
+  },
+  {
+    "label": "Forderungskonto",
+    "regex": "forderungskonto|forderungsaufstellung",
+    "category": "intern"
+  },
+  {
+    "label": "Aktenvorblatt",
+    "regex": "aktenvorblatt|deckblatt|aktendeckblatt",
+    "category": "intern"
+  },
+  {
+    "label": "Inhaltsverzeichnis",
+    "regex": "inhaltsverzeichnis|inhalt\\s*:",
+    "category": "intern"
+  },
+  {
+    "label": "Aktenblatt",
+    "regex": "^\\s*gegner:|^\\s*mandant:",
+    "category": "intern"
+  },
+  {
+    "label": "E-Mail",
+    "regex": "^von:\\s|^from:\\s|betreff:\\s",
+    "category": "schuldner"
+  },
+  {
+    "label": "Schuldnerschreiben",
+    "regex": "sehr\\s+geehrte.*herr|ratenzahlung|zahlungsvorschlag",
+    "category": "schuldner"
+  }
+]
