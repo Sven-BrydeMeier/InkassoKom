@@ -72,7 +72,7 @@ class Document(Base, SoftDeleteMixin):
     source_page_end = Column(Integer)
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
     tags = Column(JSONB, default=[])
 
     # Relationships
@@ -143,7 +143,7 @@ class DocumentChunk(Base):
     embedding_created_at = Column(DateTime(timezone=True))
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
 
     # Relationships
     document = relationship("Document", back_populates="chunks")

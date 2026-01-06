@@ -76,7 +76,7 @@ class Deadline(Base):
     priority = Column(String(20), default="normal")  # low, normal, high, critical
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
 
     # Relationships
     case = relationship("Case", back_populates="deadlines")

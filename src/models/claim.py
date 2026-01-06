@@ -136,7 +136,7 @@ class LedgerBooking(Base):
     status = Column(String(50), default="verbucht")
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
 
     # Relationships
     case = relationship("Case", back_populates="ledger_bookings")

@@ -47,7 +47,7 @@ class Template(Base, SoftDeleteMixin):
     is_default = Column(Boolean, default=False)  # Default for this type
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
     tags = Column(JSONB, default=[])
 
     # Relationships

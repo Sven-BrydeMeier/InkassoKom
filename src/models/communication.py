@@ -67,7 +67,7 @@ class Communication(Base):
     participants = Column(JSONB, default=[])  # List of party IDs or emails
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
 
     # Relationships
     case = relationship("Case", back_populates="communications")
@@ -128,7 +128,7 @@ class Message(Base):
     attachments = Column(JSONB, default=[])  # List of document IDs
 
     # Metadata
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
 
     # Relationships
     thread = relationship("Communication", back_populates="messages")

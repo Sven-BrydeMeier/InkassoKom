@@ -104,7 +104,7 @@ class Case(Base, SoftDeleteMixin):
 
     # Metadata
     tags = Column(JSONB, default=[])
-    metadata = Column(JSONB, default={})
+    extra_data = Column(JSONB, default={})
 
     # Import tracking
     imported = Column(Boolean, default=False)
