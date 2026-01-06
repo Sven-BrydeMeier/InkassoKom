@@ -5,7 +5,7 @@ import os
 from typing import Generator, Optional
 from contextlib import contextmanager
 from dataclasses import dataclass
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, parse_qs, urlencode, quote_plus
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, Session
@@ -107,15 +107,66 @@ class DatabaseConfig:
     @property
     def connection_string(self) -> str:
         """Generate SQLAlchemy connection string."""
-        # If direct URL provided, use it
+        # If direct URL provided, clean and use it
         if self.url:
-            return self.url
+            return self._clean_supabase_url(self.url)
 
         # Build connection string from components
         # URL-encode the password to handle special characters
         encoded_password = quote_plus(self.password) if self.password else ""
         ssl_args = f"?sslmode={self.ssl_mode}" if self.ssl_mode else ""
         return f"postgresql://{self.user}:{encoded_password}@{self.host}:{self.port}/{self.database}{ssl_args}"
+
+    def _clean_supabase_url(self, url: str) -> str:
+        """
+        Clean Supabase URL by removing unsupported parameters.
+
+        Supabase URLs may contain parameters like:
+        - pgbouncer=true (not supported by psycopg2)
+        - options=... (connection options)
+
+        We need to filter these out and keep only valid PostgreSQL parameters.
+        """
+        try:
+            parsed = urlparse(url)
+
+            # Parse query parameters
+            if parsed.query:
+                params = parse_qs(parsed.query)
+
+                # Valid PostgreSQL/psycopg2 connection parameters
+                valid_params = {
+                    'sslmode', 'sslcert', 'sslkey', 'sslrootcert',
+                    'connect_timeout', 'application_name',
+                    'keepalives', 'keepalives_idle', 'keepalives_interval',
+                    'target_session_attrs'
+                }
+
+                # Filter to only valid parameters
+                cleaned_params = {
+                    k: v[0] if len(v) == 1 else v
+                    for k, v in params.items()
+                    if k.lower() in valid_params
+                }
+
+                # Rebuild URL with cleaned parameters
+                if cleaned_params:
+                    query_string = urlencode(cleaned_params)
+                    clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{query_string}"
+                else:
+                    # Add sslmode=require for Supabase if no params left
+                    clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?sslmode=require"
+
+                return clean_url
+
+            # No query params, add sslmode for Supabase
+            if 'supabase' in url.lower() or 'pooler' in url.lower():
+                return f"{url}?sslmode=require"
+
+            return url
+        except Exception:
+            # If parsing fails, return original URL
+            return url
 
     @property
     def is_configured(self) -> bool:
