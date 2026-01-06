@@ -41,6 +41,18 @@ try:
 except ImportError:
     PDF_SPLITTER_AVAILABLE = False
 
+# Email Parser Integration (Email-Import)
+try:
+    from src.email_parser import (
+        EmailParser,
+        ParsedEmail,
+        parse_email_file,
+        get_parser_capabilities
+    )
+    EMAIL_PARSER_AVAILABLE = True
+except ImportError:
+    EMAIL_PARSER_AVAILABLE = False
+
 st.set_page_config(
     page_title="InkassoKom - Inkasso-Plattform",
     page_icon="⚖️",
@@ -79,6 +91,13 @@ if 'document_pdfs' not in st.session_state:
     st.session_state.document_pdfs = {}  # {doc_id: pdf_bytes} für einzelne Dokument-PDFs
 if 'case_full_pdfs' not in st.session_state:
     st.session_state.case_full_pdfs = {}  # {case_id: pdf_bytes} für Gesamt-PDFs
+# Emails
+if 'imported_emails' not in st.session_state:
+    st.session_state.imported_emails = {}  # {case_id: [ParsedEmail, ...]}
+if 'email_attachments' not in st.session_state:
+    st.session_state.email_attachments = {}  # {email_id: [attachment_bytes, ...]}
+if 'unassigned_emails' not in st.session_state:
+    st.session_state.unassigned_emails = []  # Emails ohne Akten-Zuordnung
 # AI & Kommunikation
 if 'openai_api_key' not in st.session_state:
     # Zuerst in Streamlit Secrets nachschauen
@@ -909,6 +928,11 @@ DOCUMENT_CATEGORIES = {
         'icon': '⚖️',
         'types': ['Mahnbescheid', 'Vollstreckungsbescheid', 'VB', 'PfüB', 'Klage', 'Urteil', 'Beschluss', 'Zustellung', 'EDA']
     },
+    'emailverkehr': {
+        'name': 'Emailverkehr',
+        'icon': '📧',
+        'types': ['Email', 'E-Mail', 'Email-Eingang', 'Email-Ausgang', 'Korrespondenz']
+    },
     'intern': {
         'name': 'Interne Kommunikation',
         'icon': '🏢',
@@ -1143,11 +1167,12 @@ def show_document_explorer(case_id, case_nr):
     if not all_docs:
         st.info("Keine Dokumente in dieser Akte vorhanden")
     else:
-        # Statistik
-        col1, col2, col3, col4, col5 = st.columns(5)
+        # Statistik - dynamisch basierend auf Kategorien
+        num_cats = len(DOCUMENT_CATEGORIES)
+        stat_cols = st.columns(num_cats)
         for i, (cat_id, cat_info) in enumerate(DOCUMENT_CATEGORIES.items()):
             cat_count = len([d for d in all_docs if d.get('category', 'aussergerichtlich') == cat_id])
-            with [col1, col2, col3, col4, col5][i]:
+            with stat_cols[i]:
                 st.metric(cat_info['icon'], cat_count, help=cat_info['name'])
 
         st.divider()
@@ -1193,47 +1218,131 @@ def show_document_explorer(case_id, case_nr):
 
     st.divider()
 
-    # Dokument hinzufügen
-    st.markdown("### ➕ Dokument hinzufügen")
-    col1, col2 = st.columns(2)
+    # Dokument oder Email hinzufügen
+    st.markdown("### ➕ Dokument oder Email hinzufügen")
 
-    with col1:
-        uploaded = st.file_uploader("Datei hochladen", type=['pdf', 'docx', 'jpg', 'png'], key=f"upload_{case_id}")
+    upload_tab1, upload_tab2 = st.tabs(["📄 Dokument", "📧 Email"])
 
-    with col2:
+    with upload_tab1:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            uploaded = st.file_uploader("Datei hochladen", type=['pdf', 'docx', 'jpg', 'png'], key=f"upload_{case_id}")
+
+        with col2:
+            if uploaded:
+                doc_type = st.selectbox(
+                    "Dokumenttyp",
+                    ["Rechnung", "Mahnung", "Vertrag", "Mahnbescheid", "Vollstreckungsbescheid",
+                     "Schreiben", "Notiz", "Sachstandsbericht", "Brief an Schuldner", "Sonstiges"],
+                    key=f"doc_type_{case_id}"
+                )
+                doc_category = st.selectbox(
+                    "Kategorie",
+                    [(k, v['name']) for k, v in DOCUMENT_CATEGORIES.items()],
+                    format_func=lambda x: x[1],
+                    key=f"doc_cat_{case_id}"
+                )[0]
+
         if uploaded:
-            doc_type = st.selectbox(
-                "Dokumenttyp",
-                ["Rechnung", "Mahnung", "Vertrag", "Mahnbescheid", "Vollstreckungsbescheid",
-                 "Schreiben", "Notiz", "Sachstandsbericht", "Brief an Schuldner", "Sonstiges"],
-                key=f"doc_type_{case_id}"
+            if st.button("📤 Dokument hinzufügen", type="primary", use_container_width=True, key=f"add_doc_{case_id}"):
+                # Neues Dokument erstellen
+                new_doc = {
+                    'id': f'doc-{case_id}-{datetime.now().strftime("%Y%m%d%H%M%S")}',
+                    'name': uploaded.name,
+                    'date': date.today(),
+                    'type': doc_type,
+                    'size': f'{len(uploaded.getvalue()) // 1024} KB',
+                    'category': doc_category
+                }
+
+                # Zu DEMO_DOCUMENTS hinzufügen
+                if case_id not in DEMO_DOCUMENTS:
+                    DEMO_DOCUMENTS[case_id] = []
+                DEMO_DOCUMENTS[case_id].append(new_doc)
+
+                st.success(f"✅ '{uploaded.name}' zur Akte hinzugefügt!")
+                st.rerun()
+
+    with upload_tab2:
+        # Email Upload
+        if EMAIL_PARSER_AVAILABLE:
+            email_files = st.file_uploader(
+                "Email-Dateien hochladen (.eml, .msg)",
+                type=['eml', 'msg'],
+                accept_multiple_files=True,
+                key=f"email_upload_{case_id}",
+                help="Drag & Drop oder Klicken zum Auswählen"
             )
-            doc_category = st.selectbox(
-                "Kategorie",
-                [(k, v['name']) for k, v in DOCUMENT_CATEGORIES.items()],
-                format_func=lambda x: x[1],
-                key=f"doc_cat_{case_id}"
-            )[0]
 
-    if uploaded:
-        if st.button("📤 Dokument hinzufügen", type="primary", use_container_width=True, key=f"add_doc_{case_id}"):
-            # Neues Dokument erstellen
-            new_doc = {
-                'id': f'doc-{case_id}-{datetime.now().strftime("%Y%m%d%H%M%S")}',
-                'name': uploaded.name,
-                'date': date.today(),
-                'type': doc_type,
-                'size': f'{len(uploaded.getvalue()) // 1024} KB',
-                'category': doc_category
-            }
+            if email_files:
+                st.markdown("#### Erkannte Emails:")
+                for email_file in email_files:
+                    try:
+                        parsed = parse_email_file(email_file.getvalue(), email_file.name)
+                        with st.expander(f"📧 {parsed.get_short_subject(40)}", expanded=True):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Von:** {parsed.sender_name} <{parsed.sender_email}>")
+                                st.write(f"**An:** {', '.join(parsed.to[:2])}{'...' if len(parsed.to) > 2 else ''}")
+                                st.write(f"**Datum:** {parsed.get_display_date()}")
+                            with col2:
+                                st.write(f"**Anhänge:** {len(parsed.attachments)}")
+                                if parsed.case_references:
+                                    st.write(f"**Aktenzeichen:** {', '.join(parsed.case_references[:3])}")
+                            st.caption(parsed.get_body_preview(150))
+                    except Exception as e:
+                        st.error(f"Fehler bei {email_file.name}: {str(e)}")
 
-            # Zu DEMO_DOCUMENTS hinzufügen
-            if case_id not in DEMO_DOCUMENTS:
-                DEMO_DOCUMENTS[case_id] = []
-            DEMO_DOCUMENTS[case_id].append(new_doc)
+                if st.button("📧 Emails zur Akte hinzufügen", type="primary", use_container_width=True, key=f"add_emails_{case_id}"):
+                    added_count = 0
+                    for email_file in email_files:
+                        try:
+                            parsed = parse_email_file(email_file.getvalue(), email_file.name)
+                            email_id = f'email-{case_id}-{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
 
-            st.success(f"✅ '{uploaded.name}' zur Akte hinzugefügt!")
-            st.rerun()
+                            # Als Dokument speichern
+                            new_doc = {
+                                'id': email_id,
+                                'name': f"{parsed.get_short_subject(30)}.eml",
+                                'date': parsed.date.date() if parsed.date else date.today(),
+                                'type': 'Email',
+                                'size': f'{len(email_file.getvalue()) // 1024} KB',
+                                'category': 'emailverkehr',
+                                'email_data': {
+                                    'subject': parsed.subject,
+                                    'sender': parsed.sender,
+                                    'sender_email': parsed.sender_email,
+                                    'to': parsed.to,
+                                    'cc': parsed.cc,
+                                    'body_preview': parsed.get_body_preview(500),
+                                    'attachments': len(parsed.attachments),
+                                    'message_id': parsed.message_id
+                                }
+                            }
+
+                            if case_id not in DEMO_DOCUMENTS:
+                                DEMO_DOCUMENTS[case_id] = []
+                            DEMO_DOCUMENTS[case_id].append(new_doc)
+
+                            # Email-Daten separat speichern
+                            if case_id not in st.session_state.imported_emails:
+                                st.session_state.imported_emails[case_id] = []
+                            st.session_state.imported_emails[case_id].append({
+                                'id': email_id,
+                                'parsed': parsed,
+                                'raw': email_file.getvalue()
+                            })
+
+                            added_count += 1
+                        except Exception as e:
+                            st.error(f"Fehler bei {email_file.name}: {str(e)}")
+
+                    if added_count > 0:
+                        st.success(f"✅ {added_count} Email(s) zur Akte hinzugefügt!")
+                        st.rerun()
+        else:
+            st.warning("📧 Email-Parser nicht verfügbar. Bitte src/email_parser installieren.")
 
 def get_document_pdf(doc, case_nr):
     """
@@ -2485,6 +2594,332 @@ def show_ra_micro_import():
                 st.write(f"**Importiert:** {case['created'].strftime('%d.%m.%Y %H:%M')}")
 
 # =============================================================================
+# EMAILVERKEHR - Intelligenter Ordner für alle Emails
+# =============================================================================
+def show_emailverkehr():
+    """Intelligenter Ordner: Zeigt alle Emails aller Akten mit Suchfunktion"""
+    st.markdown("## 📧 Emailverkehr")
+    st.caption("Intelligenter Ordner - Alle Emails aller Akten")
+
+    # Alle Emails sammeln
+    all_emails = []
+    all_cases = get_all_cases()
+    case_map = {c['id']: c for c in all_cases}
+
+    # Aus imported_emails
+    for case_id, emails in st.session_state.get('imported_emails', {}).items():
+        case_info = case_map.get(case_id, {'nr': case_id, 'debtor': 'Unbekannt'})
+        for email_data in emails:
+            all_emails.append({
+                'case_id': case_id,
+                'case_nr': case_info.get('nr', case_id),
+                'case_debtor': case_info.get('debtor', 'Unbekannt'),
+                **email_data
+            })
+
+    # Aus DEMO_DOCUMENTS (falls Emails dort gespeichert)
+    for case_id, docs in DEMO_DOCUMENTS.items():
+        case_info = case_map.get(case_id, {'nr': case_id, 'debtor': 'Unbekannt'})
+        for doc in docs:
+            if doc.get('category') == 'emailverkehr' and 'email_data' in doc:
+                # Prüfen ob bereits in imported_emails
+                if not any(e.get('id') == doc['id'] for e in all_emails):
+                    all_emails.append({
+                        'id': doc['id'],
+                        'case_id': case_id,
+                        'case_nr': case_info.get('nr', case_id),
+                        'case_debtor': case_info.get('debtor', 'Unbekannt'),
+                        'parsed': None,  # Keine ParsedEmail-Instanz
+                        'doc': doc
+                    })
+
+    # Unzugeordnete Emails
+    for email_data in st.session_state.get('unassigned_emails', []):
+        all_emails.append({
+            'case_id': None,
+            'case_nr': '⚠️ Nicht zugeordnet',
+            'case_debtor': '-',
+            **email_data
+        })
+
+    # Statistik
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("📧 Gesamt", len(all_emails))
+    with col2:
+        assigned = len([e for e in all_emails if e.get('case_id')])
+        st.metric("✅ Zugeordnet", assigned)
+    with col3:
+        unassigned = len([e for e in all_emails if not e.get('case_id')])
+        st.metric("⚠️ Offen", unassigned)
+    with col4:
+        cases_with_email = len(set(e['case_id'] for e in all_emails if e.get('case_id')))
+        st.metric("📁 Akten", cases_with_email)
+
+    st.divider()
+
+    # Filter und Suche
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        search_term = st.text_input("🔍 Suche", placeholder="Betreff, Absender, Inhalt...", key="email_search")
+    with col2:
+        case_filter = st.selectbox(
+            "Akte",
+            ["Alle Akten"] + [f"{c['nr']} - {c['debtor']}" for c in all_cases],
+            key="email_case_filter"
+        )
+    with col3:
+        sort_by = st.selectbox("Sortierung", ["Datum (neu)", "Datum (alt)", "Absender", "Betreff"], key="email_sort")
+
+    # Filter anwenden
+    filtered_emails = all_emails
+
+    if search_term:
+        search_lower = search_term.lower()
+        filtered_emails = [
+            e for e in filtered_emails
+            if (e.get('parsed') and (
+                search_lower in e['parsed'].subject.lower() or
+                search_lower in e['parsed'].sender.lower() or
+                search_lower in e['parsed'].body_plain.lower()
+            )) or (e.get('doc') and (
+                search_lower in e['doc'].get('email_data', {}).get('subject', '').lower() or
+                search_lower in e['doc'].get('email_data', {}).get('sender', '').lower()
+            ))
+        ]
+
+    if case_filter != "Alle Akten":
+        filter_case_nr = case_filter.split(" - ")[0]
+        filtered_emails = [e for e in filtered_emails if e.get('case_nr') == filter_case_nr]
+
+    # Sortieren
+    def get_sort_key(email_item):
+        parsed = email_item.get('parsed')
+        doc = email_item.get('doc', {})
+        if parsed:
+            if sort_by.startswith("Datum"):
+                return parsed.date or datetime.min
+            elif sort_by == "Absender":
+                return parsed.sender_email.lower()
+            else:
+                return parsed.subject.lower()
+        else:
+            email_data = doc.get('email_data', {})
+            if sort_by.startswith("Datum"):
+                return doc.get('date', date.min)
+            elif sort_by == "Absender":
+                return email_data.get('sender_email', '').lower()
+            else:
+                return email_data.get('subject', '').lower()
+
+    reverse_sort = sort_by == "Datum (neu)"
+    filtered_emails.sort(key=get_sort_key, reverse=reverse_sort)
+
+    st.divider()
+
+    # Email-Liste anzeigen
+    if not filtered_emails:
+        st.info("Keine Emails gefunden. Importieren Sie Emails über die Aktenansicht oder fügen Sie neue hinzu.")
+
+        # Option zum direkten Email-Import
+        st.markdown("### 📥 Emails importieren (automatische Zuordnung)")
+        show_email_import_with_matching()
+    else:
+        st.markdown(f"### 📋 {len(filtered_emails)} Email(s)")
+
+        for i, email_item in enumerate(filtered_emails):
+            parsed = email_item.get('parsed')
+            doc = email_item.get('doc', {})
+
+            if parsed:
+                subject = parsed.subject
+                sender = f"{parsed.sender_name} <{parsed.sender_email}>"
+                email_date = parsed.get_display_date()
+                preview = parsed.get_body_preview(100)
+                attachments = len(parsed.attachments)
+            else:
+                email_data = doc.get('email_data', {})
+                subject = email_data.get('subject', doc.get('name', 'Unbekannt'))
+                sender = email_data.get('sender', 'Unbekannt')
+                email_date = fmt_date(doc.get('date', date.today()))
+                preview = email_data.get('body_preview', '')[:100]
+                attachments = email_data.get('attachments', 0)
+
+            with st.expander(f"📧 **{subject[:50]}{'...' if len(subject) > 50 else ''}** | {email_item['case_nr']}", expanded=False):
+                col1, col2 = st.columns([3, 1])
+
+                with col1:
+                    st.write(f"**Von:** {sender}")
+                    st.write(f"**Datum:** {email_date}")
+                    st.write(f"**Akte:** {email_item['case_nr']} ({email_item['case_debtor']})")
+                    if preview:
+                        st.caption(preview)
+
+                with col2:
+                    if attachments > 0:
+                        st.write(f"📎 {attachments} Anhang/Anhänge")
+
+                    # Aktionen
+                    if email_item.get('case_id'):
+                        if st.button("📁 Zur Akte", key=f"goto_case_{i}"):
+                            st.session_state.selected_case = email_item['case_id']
+                            st.session_state.page = 'case_detail'
+                            st.rerun()
+                    else:
+                        # Zuordnung ermöglichen
+                        st.warning("Nicht zugeordnet")
+                        target_case = st.selectbox(
+                            "Zuordnen zu:",
+                            ["Auswählen..."] + [f"{c['id']}|{c['nr']}" for c in all_cases],
+                            format_func=lambda x: x.split("|")[1] if "|" in x else x,
+                            key=f"assign_{i}"
+                        )
+                        if target_case != "Auswählen..." and st.button("✅ Zuordnen", key=f"do_assign_{i}"):
+                            target_id = target_case.split("|")[0]
+                            # Email zu Akte zuordnen
+                            if target_id not in st.session_state.imported_emails:
+                                st.session_state.imported_emails[target_id] = []
+                            st.session_state.imported_emails[target_id].append(email_item)
+
+                            # Aus unassigned entfernen
+                            if email_item in st.session_state.unassigned_emails:
+                                st.session_state.unassigned_emails.remove(email_item)
+
+                            st.success(f"Email zugeordnet zu {target_case.split('|')[1]}")
+                            st.rerun()
+
+        st.divider()
+
+        # Neue Emails importieren
+        st.markdown("### 📥 Weitere Emails importieren")
+        show_email_import_with_matching()
+
+
+def show_email_import_with_matching():
+    """Email-Import mit automatischer Akten-Zuordnung"""
+    if not EMAIL_PARSER_AVAILABLE:
+        st.warning("📧 Email-Parser nicht verfügbar.")
+        return
+
+    email_files = st.file_uploader(
+        "Email-Dateien (.eml, .msg) per Drag & Drop",
+        type=['eml', 'msg'],
+        accept_multiple_files=True,
+        key="global_email_upload",
+        help="Emails werden automatisch passenden Akten zugeordnet"
+    )
+
+    if email_files:
+        all_cases = get_all_cases()
+        results = []
+
+        st.markdown("#### Erkannte Emails und Zuordnung:")
+
+        for email_file in email_files:
+            try:
+                parsed = parse_email_file(email_file.getvalue(), email_file.name)
+
+                # Automatische Zuordnung versuchen
+                matched_case = parsed.match_to_case(all_cases)
+
+                results.append({
+                    'file': email_file,
+                    'parsed': parsed,
+                    'matched_case': matched_case,
+                    'manual_case': None
+                })
+
+                with st.container():
+                    col1, col2, col3 = st.columns([2, 2, 1])
+
+                    with col1:
+                        st.write(f"📧 **{parsed.get_short_subject(35)}**")
+                        st.caption(f"Von: {parsed.sender_email}")
+
+                    with col2:
+                        if matched_case:
+                            st.success(f"✅ → {matched_case['nr']}")
+                        else:
+                            # Manuelle Auswahl
+                            case_options = ["Nicht zuordnen"] + [f"{c['id']}|{c['nr']} - {c['debtor']}" for c in all_cases]
+                            selected = st.selectbox(
+                                "Zuordnen:",
+                                case_options,
+                                key=f"match_{email_file.name}",
+                                format_func=lambda x: x.split("|")[1] if "|" in x else x
+                            )
+                            if selected != "Nicht zuordnen":
+                                results[-1]['manual_case'] = selected.split("|")[0]
+
+                    with col3:
+                        if parsed.attachments:
+                            st.write(f"📎 {len(parsed.attachments)}")
+
+            except Exception as e:
+                st.error(f"Fehler: {email_file.name} - {str(e)}")
+
+        if results:
+            if st.button("📥 Alle Emails importieren", type="primary", use_container_width=True):
+                imported = 0
+                unassigned = 0
+
+                for result in results:
+                    parsed = result['parsed']
+                    case_id = None
+
+                    if result['matched_case']:
+                        case_id = result['matched_case']['id']
+                    elif result['manual_case']:
+                        case_id = result['manual_case']
+
+                    email_id = f'email-{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
+                    email_entry = {
+                        'id': email_id,
+                        'parsed': parsed,
+                        'raw': result['file'].getvalue()
+                    }
+
+                    if case_id:
+                        # Zu Akte hinzufügen
+                        if case_id not in st.session_state.imported_emails:
+                            st.session_state.imported_emails[case_id] = []
+                        st.session_state.imported_emails[case_id].append(email_entry)
+
+                        # Auch als Dokument speichern
+                        new_doc = {
+                            'id': email_id,
+                            'name': f"{parsed.get_short_subject(30)}.eml",
+                            'date': parsed.date.date() if parsed.date else date.today(),
+                            'type': 'Email',
+                            'size': f'{len(result["file"].getvalue()) // 1024} KB',
+                            'category': 'emailverkehr',
+                            'email_data': {
+                                'subject': parsed.subject,
+                                'sender': parsed.sender,
+                                'sender_email': parsed.sender_email,
+                                'to': parsed.to,
+                                'body_preview': parsed.get_body_preview(500),
+                                'attachments': len(parsed.attachments)
+                            }
+                        }
+                        if case_id not in DEMO_DOCUMENTS:
+                            DEMO_DOCUMENTS[case_id] = []
+                        DEMO_DOCUMENTS[case_id].append(new_doc)
+
+                        imported += 1
+                    else:
+                        # Unzugeordnet speichern
+                        st.session_state.unassigned_emails.append(email_entry)
+                        unassigned += 1
+
+                msg = f"✅ {imported} Email(s) importiert"
+                if unassigned > 0:
+                    msg += f", {unassigned} nicht zugeordnet"
+                st.success(msg)
+                st.rerun()
+
+
+# =============================================================================
 # LOGIN
 # =============================================================================
 def show_login():
@@ -2553,6 +2988,13 @@ def lawyer_dashboard():
             st.session_state.page = 'messages'
             st.rerun()
 
+        # Emailverkehr (intelligenter Ordner)
+        email_count = sum(len(emails) for emails in st.session_state.get('imported_emails', {}).values())
+        email_label = f"📧 Emailverkehr ({email_count})" if email_count > 0 else "📧 Emailverkehr"
+        if st.button(email_label, use_container_width=True):
+            st.session_state.page = 'emailverkehr'
+            st.rerun()
+
         if st.button("✉️ Nachricht senden", use_container_width=True):
             st.session_state.page = 'compose'
             st.rerun()
@@ -2596,6 +3038,7 @@ def lawyer_dashboard():
     elif page == 'compose': show_compose_message()
     elif page == 'settings': show_settings()
     elif page == 'ra_micro_import': show_ra_micro_import()
+    elif page == 'emailverkehr': show_emailverkehr()
     elif page == 'dunning': show_dunning()
     elif page == 'klage': show_klage_entwurf()
     elif page == 'templates': show_vorlagen()

@@ -34,6 +34,7 @@ tiktoken>=0.5.2
 
 # Email
 email-validator>=2.1.0
+extract-msg>=0.48.0  # Outlook .msg Datei-Parser (optional)
 
 # Utilities
 python-dateutil>=2.8.2
