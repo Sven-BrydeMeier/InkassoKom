@@ -77,21 +77,28 @@ class RedisCache:
         # Try Streamlit secrets first
         if HAS_STREAMLIT:
             try:
+                # Try [redis] section
                 redis_secrets = st.secrets.get("redis", {})
                 if redis_secrets:
                     url = redis_secrets.get("url", redis_secrets.get("REDIS_URL"))
                     if url:
                         return url
 
-                # Try direct key
-                url = st.secrets.get("REDIS_URL")
-                if url:
-                    return url
+                # Try various common key names at top level
+                for key in ["REDIS_URL", "UPSTASH_REDIS_URL", "REDIS_TLS_URL", "redis_url"]:
+                    url = st.secrets.get(key)
+                    if url:
+                        return url
             except Exception:
                 pass
 
-        # Fall back to environment variable
-        return os.getenv("REDIS_URL")
+        # Fall back to environment variables
+        for key in ["REDIS_URL", "UPSTASH_REDIS_URL", "REDIS_TLS_URL"]:
+            url = os.getenv(key)
+            if url:
+                return url
+
+        return None
 
     @property
     def is_connected(self) -> bool:
