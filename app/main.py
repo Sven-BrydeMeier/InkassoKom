@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.02-1030"
+APP_VERSION = "v2026.01.07-1445"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
