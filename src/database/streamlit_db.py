@@ -11,7 +11,8 @@ from .connection import (
     get_engine,
     get_db_session,
     test_connection,
-    get_connection_info
+    get_connection_info,
+    ensure_tables_exist
 )
 from .cache import get_cache, cache_enabled
 
@@ -29,6 +30,12 @@ def get_db_status() -> Dict[str, Any]:
 
     # Test database connection
     db_connected, db_message = test_connection() if db_config.is_configured else (False, "Nicht konfiguriert")
+
+    # If connected, ensure tables exist
+    if db_connected:
+        tables_ok, tables_msg = ensure_tables_exist()
+        if not tables_ok:
+            db_message = tables_msg
 
     # Get cache stats (includes error message if not connected)
     cache_stats = cache.get_stats()

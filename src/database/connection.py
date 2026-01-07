@@ -276,6 +276,31 @@ def init_database(drop_all: bool = False):
     return engine
 
 
+def tables_exist() -> bool:
+    """Check if the main tables exist in the database."""
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            # Check if 'cases' table exists
+            result = conn.execute(text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cases')"
+            ))
+            return result.scalar()
+    except Exception:
+        return False
+
+
+def ensure_tables_exist():
+    """Create tables if they don't exist."""
+    if not tables_exist():
+        try:
+            init_database()
+            return True, "Tabellen erfolgreich erstellt"
+        except Exception as e:
+            return False, f"Fehler beim Erstellen der Tabellen: {str(e)}"
+    return True, "Tabellen existieren bereits"
+
+
 def test_connection() -> tuple[bool, str]:
     """Test database connection and return status."""
     try:
