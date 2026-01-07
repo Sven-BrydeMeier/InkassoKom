@@ -3,6 +3,7 @@ Redis Cache Integration for InkassoKom
 """
 import os
 import json
+import ssl
 from typing import Any, Optional
 from datetime import timedelta
 
@@ -34,18 +35,42 @@ class RedisCache:
 
         if HAS_REDIS and self._url:
             try:
+                # Check if SSL is needed (rediss:// protocol or explicit setting)
+                use_ssl = self._url.startswith('rediss://') or self._should_use_ssl()
+
+                connection_kwargs = {
+                    'decode_responses': True,
+                    'socket_timeout': 5,
+                    'socket_connect_timeout': 5
+                }
+
+                # Configure SSL for secure connections (e.g., Upstash)
+                if use_ssl:
+                    connection_kwargs['ssl'] = True
+                    connection_kwargs['ssl_cert_reqs'] = ssl.CERT_NONE  # For cloud Redis services
+
                 self._client = redis.from_url(
                     self._url,
-                    decode_responses=True,
-                    socket_timeout=5,
-                    socket_connect_timeout=5
+                    **connection_kwargs
                 )
                 # Test connection
                 self._client.ping()
                 self._connected = True
-            except Exception:
+            except Exception as e:
+                print(f"Redis connection error: {e}")
                 self._client = None
                 self._connected = False
+
+    def _should_use_ssl(self) -> bool:
+        """Check if SSL should be used based on secrets or environment."""
+        if HAS_STREAMLIT:
+            try:
+                redis_secrets = st.secrets.get("redis", {})
+                if redis_secrets.get("ssl", False):
+                    return True
+            except Exception:
+                pass
+        return os.getenv("REDIS_SSL", "false").lower() == "true"
 
     def _get_redis_url(self) -> Optional[str]:
         """Get Redis URL from secrets or environment."""
