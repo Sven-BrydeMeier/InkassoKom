@@ -30,6 +30,9 @@ def get_db_status() -> Dict[str, Any]:
     # Test database connection
     db_connected, db_message = test_connection() if db_config.is_configured else (False, "Nicht konfiguriert")
 
+    # Get cache stats (includes error message if not connected)
+    cache_stats = cache.get_stats()
+
     return {
         'database': {
             'configured': db_config.is_configured,
@@ -41,7 +44,8 @@ def get_db_status() -> Dict[str, Any]:
         'cache': {
             'configured': cache._url is not None,
             'connected': cache.is_connected,
-            'stats': cache.get_stats() if cache.is_connected else {}
+            'stats': cache_stats,
+            'error': cache_stats.get('error') if not cache.is_connected else None
         }
     }
 
@@ -67,7 +71,8 @@ def show_db_status_widget():
             stats = status['cache']['stats']
             st.success(f"✅ Redis Cache ({stats.get('total_keys', 0)} Keys)")
         elif status['cache']['configured']:
-            st.warning("⚠️ Redis nicht erreichbar")
+            error_msg = status['cache'].get('error', 'Unbekannter Fehler')
+            st.warning(f"⚠️ Redis-Fehler: {error_msg[:50]}..." if error_msg and len(error_msg) > 50 else f"⚠️ Redis-Fehler: {error_msg}")
         else:
             st.info("ℹ️ Kein Cache konfiguriert")
 

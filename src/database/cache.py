@@ -32,22 +32,23 @@ class RedisCache:
         self._client = None
         self._url = url or self._get_redis_url()
         self._connected = False
+        self._error_message = None
 
         if HAS_REDIS and self._url:
             try:
-                # Check if SSL is needed (rediss:// protocol or explicit setting)
-                use_ssl = self._url.startswith('rediss://') or self._should_use_ssl()
-
                 connection_kwargs = {
                     'decode_responses': True,
-                    'socket_timeout': 5,
-                    'socket_connect_timeout': 5
+                    'socket_timeout': 10,
+                    'socket_connect_timeout': 10
                 }
 
-                # Configure SSL for secure connections (e.g., Upstash)
-                if use_ssl:
-                    connection_kwargs['ssl'] = True
-                    connection_kwargs['ssl_cert_reqs'] = ssl.CERT_NONE  # For cloud Redis services
+                # For rediss:// URLs (SSL), we need to configure SSL cert verification
+                # Cloud services like Upstash use valid certs, so we can use default settings
+                # But some services might need relaxed verification
+                if self._url.startswith('rediss://'):
+                    # Let redis-py handle SSL from the URL scheme
+                    # Just relax cert requirements for compatibility
+                    connection_kwargs['ssl_cert_reqs'] = None
 
                 self._client = redis.from_url(
                     self._url,
@@ -57,6 +58,7 @@ class RedisCache:
                 self._client.ping()
                 self._connected = True
             except Exception as e:
+                self._error_message = str(e)
                 print(f"Redis connection error: {e}")
                 self._client = None
                 self._connected = False
@@ -227,7 +229,11 @@ class RedisCache:
     def get_stats(self) -> dict:
         """Get cache statistics."""
         if not self.is_connected:
-            return {"connected": False}
+            return {
+                "connected": False,
+                "error": self._error_message,
+                "url_configured": bool(self._url)
+            }
 
         try:
             info = self._client.info()
@@ -238,8 +244,8 @@ class RedisCache:
                 "total_keys": self._client.dbsize(),
                 "uptime_days": info.get("uptime_in_days", 0)
             }
-        except Exception:
-            return {"connected": False}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
 
 
 # Global cache instance
