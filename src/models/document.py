@@ -4,7 +4,7 @@ Document, DocumentChunk, and GeneratedDocument Models
 Document storage and RAG preparation models.
 """
 
-from sqlalchemy import Column, String, Text, Integer, Date, ForeignKey, Index
+from sqlalchemy import Column, String, Text, Integer, Date, DateTime, Boolean, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
@@ -89,10 +89,6 @@ class Document(Base, SoftDeleteMixin):
         return f"<Document(id={self.id}, filename='{self.filename}')>"
 
 
-# Import Boolean
-from sqlalchemy import Boolean
-
-
 class DocumentChunk(Base):
     """
     Document chunk for RAG.
@@ -155,10 +151,6 @@ class DocumentChunk(Base):
 
     def __repr__(self) -> str:
         return f"<DocumentChunk(doc={self.document_id}, idx={self.chunk_index})>"
-
-
-# Import DateTime
-from sqlalchemy import DateTime
 
 
 class GeneratedDocument(Base):
