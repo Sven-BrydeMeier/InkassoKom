@@ -93,11 +93,37 @@ class DatabaseBackedStore:
     def __init__(self):
         self._use_db = is_database_configured()
         self._cache = get_cache()
+        self._tables_checked = False
+
+    def _ensure_tables(self) -> bool:
+        """Ensure database tables exist before querying."""
+        if self._tables_checked:
+            return True
+
+        if self._use_db:
+            try:
+                connected, _ = test_connection()
+                if connected:
+                    success, msg = ensure_tables_exist()
+                    self._tables_checked = success
+                    if not success:
+                        print(f"Table creation failed: {msg}")
+                    return success
+            except Exception as e:
+                print(f"Table check error: {e}")
+                return False
+        return False
 
     @property
     def use_database(self) -> bool:
         """Check if we should use database."""
-        return self._use_db and test_connection()[0]
+        if not self._use_db:
+            return False
+        connected, _ = test_connection()
+        if connected:
+            # Ensure tables exist before allowing database use
+            self._ensure_tables()
+        return connected and self._tables_checked
 
     def get_all_cases(self) -> List[Dict[str, Any]]:
         """Get all cases from database or session state."""
