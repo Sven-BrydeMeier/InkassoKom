@@ -119,6 +119,12 @@ if 'pending_wv_vorschlaege' not in st.session_state:
     st.session_state.pending_wv_vorschlaege = None  # Temporär nach Nachrichtenversand
 if 'wv_notifications' not in st.session_state:
     st.session_state.wv_notifications = []  # Fällige WVs
+if 'active_wv_check' not in st.session_state:
+    st.session_state.active_wv_check = None  # Aktive WV-Prüfung
+if 'wv_neu_terminieren' not in st.session_state:
+    st.session_state.wv_neu_terminieren = False  # WV neu terminieren Dialog
+if 'compose_prefill' not in st.session_state:
+    st.session_state.compose_prefill = None  # Vorbefüllte Nachricht aus WV
 # AI & Kommunikation
 if 'openai_api_key' not in st.session_state:
     # Zuerst in Streamlit Secrets nachschauen
@@ -3033,6 +3039,14 @@ def lawyer_dashboard():
         if st.button("⏰ Verjährung", use_container_width=True):
             st.session_state.page = 'limitation'
             st.rerun()
+
+        # Wiedervorlagen mit Badge
+        wv_count = get_wv_count()
+        wv_label = f"📅 Wiedervorlagen ({wv_count})" if wv_count > 0 else "📅 Wiedervorlagen"
+        if st.button(wv_label, use_container_width=True, type="primary" if wv_count > 0 else "secondary"):
+            st.session_state.page = 'wiedervorlagen'
+            st.rerun()
+
         st.divider()
         if st.button("📋 Vorlagen", use_container_width=True):
             st.session_state.page = 'templates'
@@ -3065,6 +3079,7 @@ def lawyer_dashboard():
     elif page == 'templates': show_vorlagen()
     elif page == 'enforcement': show_enforcement()
     elif page == 'limitation': show_limitation()
+    elif page == 'wiedervorlagen': show_wiedervorlage_dashboard()
     else: show_lawyer_overview()
 
 def show_lawyer_overview():
@@ -3156,6 +3171,328 @@ def show_lawyer_overview():
     st.markdown("### ⚠️ Warnungen")
     st.warning("**Verjährung:** Akte 1/25 - Prüfung empfohlen")
     st.info("**Widerspruchsfrist:** Akte 2/25 - läuft in 7 Tagen ab")
+
+
+# =============================================================================
+# WIEDERVORLAGE FUNKTIONEN
+# =============================================================================
+
+def get_faellige_wiedervorlagen() -> list:
+    """Gibt alle heute oder überfälligen Wiedervorlagen zurück"""
+    faellige = []
+    heute = date.today()
+
+    for case_id, wvs in st.session_state.get('wiedervorlagen', {}).items():
+        for wv in wvs:
+            wv_datum = wv.get('datum')
+            if isinstance(wv_datum, str):
+                try:
+                    wv_datum = datetime.strptime(wv_datum, '%Y-%m-%d').date()
+                except:
+                    continue
+
+            if wv_datum and wv_datum <= heute and not wv.get('erledigt', False):
+                # Akte finden
+                case = None
+                for c in DEMO_CASES + st.session_state.get('imported_cases', []):
+                    if c['id'] == case_id:
+                        case = c
+                        break
+
+                faellige.append({
+                    **wv,
+                    'case_id': case_id,
+                    'case': case,
+                    'ueberfaellig': (heute - wv_datum).days
+                })
+
+    return sorted(faellige, key=lambda x: x.get('ueberfaellig', 0), reverse=True)
+
+
+def get_anstehende_wiedervorlagen(tage_voraus: int = 7) -> list:
+    """Gibt Wiedervorlagen der nächsten X Tage zurück"""
+    anstehende = []
+    heute = date.today()
+    grenze = heute + timedelta(days=tage_voraus)
+
+    for case_id, wvs in st.session_state.get('wiedervorlagen', {}).items():
+        for wv in wvs:
+            wv_datum = wv.get('datum')
+            if isinstance(wv_datum, str):
+                try:
+                    wv_datum = datetime.strptime(wv_datum, '%Y-%m-%d').date()
+                except:
+                    continue
+
+            if wv_datum and heute < wv_datum <= grenze and not wv.get('erledigt', False):
+                case = None
+                for c in DEMO_CASES + st.session_state.get('imported_cases', []):
+                    if c['id'] == case_id:
+                        case = c
+                        break
+
+                anstehende.append({
+                    **wv,
+                    'case_id': case_id,
+                    'case': case,
+                    'tage_bis': (wv_datum - heute).days
+                })
+
+    return sorted(anstehende, key=lambda x: x.get('tage_bis', 999))
+
+
+def get_wv_count() -> int:
+    """Zählt fällige Wiedervorlagen für Badge"""
+    return len(get_faellige_wiedervorlagen())
+
+
+def show_wiedervorlage_dashboard():
+    """Zeigt das Wiedervorlage-Dashboard"""
+    st.markdown("## 📅 Wiedervorlagen")
+
+    faellige = get_faellige_wiedervorlagen()
+    anstehende = get_anstehende_wiedervorlagen(14)
+
+    # Übersichtskacheln
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("🔴 Überfällig", len([w for w in faellige if w.get('ueberfaellig', 0) > 0]))
+    with col2:
+        st.metric("🟡 Heute fällig", len([w for w in faellige if w.get('ueberfaellig', 0) == 0]))
+    with col3:
+        st.metric("🔵 Diese Woche", len([w for w in anstehende if w.get('tage_bis', 999) <= 7]))
+    with col4:
+        total = sum(len(wvs) for wvs in st.session_state.get('wiedervorlagen', {}).values())
+        erledigt = sum(
+            1 for wvs in st.session_state.get('wiedervorlagen', {}).values()
+            for wv in wvs if wv.get('erledigt', False)
+        )
+        st.metric("✅ Erledigt", f"{erledigt}/{total}")
+
+    st.divider()
+
+    # Fällige WVs
+    if faellige:
+        st.markdown("### 🔴 Fällige Wiedervorlagen")
+
+        for i, wv in enumerate(faellige):
+            case = wv.get('case', {})
+            with st.expander(f"⏰ {wv.get('titel', 'WV')} - {case.get('nr', 'Unbekannt')} ({case.get('debtor', 'Unbekannt')})", expanded=True):
+                col1, col2 = st.columns([3, 1])
+
+                with col1:
+                    st.write(f"**Datum:** {wv.get('datum')}")
+                    st.write(f"**Grund:** {wv.get('grund', 'Nicht angegeben')}")
+                    st.write(f"**Bedingung:** {wv.get('bedingung', 'Nicht angegeben')}")
+                    if wv.get('beschreibung'):
+                        st.caption(wv.get('beschreibung'))
+
+                    if wv.get('ueberfaellig', 0) > 0:
+                        st.error(f"⚠️ {wv['ueberfaellig']} Tage überfällig!")
+
+                with col2:
+                    # WV prüfen Button
+                    if st.button("🔍 Prüfen", key=f"wv_check_{i}", type="primary"):
+                        st.session_state.active_wv_check = {
+                            'wv': wv,
+                            'index': i,
+                            'case_id': wv.get('case_id')
+                        }
+                        st.rerun()
+
+                    if st.button("✅ Erledigt", key=f"wv_done_{i}"):
+                        # WV als erledigt markieren
+                        case_id = wv.get('case_id')
+                        if case_id in st.session_state.wiedervorlagen:
+                            for wv_entry in st.session_state.wiedervorlagen[case_id]:
+                                if wv_entry.get('datum') == wv.get('datum') and wv_entry.get('titel') == wv.get('titel'):
+                                    wv_entry['erledigt'] = True
+                                    wv_entry['erledigt_am'] = datetime.now().isoformat()
+                                    break
+                        st.success("✅ Als erledigt markiert")
+                        st.rerun()
+    else:
+        st.success("✅ Keine fälligen Wiedervorlagen")
+
+    # Anstehende WVs
+    if anstehende:
+        st.markdown("### 📅 Anstehende Wiedervorlagen")
+
+        for i, wv in enumerate(anstehende):
+            case = wv.get('case', {})
+            tage = wv.get('tage_bis', 0)
+            icon = "🟡" if tage <= 3 else "🔵"
+
+            with st.expander(f"{icon} {wv.get('titel', 'WV')} in {tage} Tagen - {case.get('nr', 'Unbekannt')}"):
+                st.write(f"**Datum:** {wv.get('datum')}")
+                st.write(f"**Akte:** {case.get('creditor', '')} ./. {case.get('debtor', '')}")
+                st.write(f"**Grund:** {wv.get('grund', 'Nicht angegeben')}")
+
+    # WV Prüfungs-Dialog
+    if 'active_wv_check' in st.session_state and st.session_state.active_wv_check:
+        show_wv_pruefung_dialog()
+
+
+def show_wv_pruefung_dialog():
+    """Zeigt den WV-Prüfungsdialog mit Bedingungsprüfung und Briefgenerierung"""
+    wv_data = st.session_state.active_wv_check
+    wv = wv_data.get('wv', {})
+    case_id = wv_data.get('case_id')
+
+    # Akte laden
+    case = wv.get('case', {})
+
+    st.divider()
+    st.markdown("### 🔍 Wiedervorlage-Prüfung")
+    st.info(f"**{wv.get('titel')}** für Akte {case.get('nr', 'Unbekannt')}")
+
+    # Bedingungsprüfung
+    grund = wv.get('grund', 'sonstiges')
+    bedingung = wv.get('bedingung', 'sonstiges')
+
+    st.markdown("#### Bedingungsprüfung")
+
+    # Aktendaten für Prüfung sammeln
+    saldo, haben, soll = get_balance(case_id) if case_id else (0, 0, 0)
+
+    case_data = {
+        'offener_betrag': saldo,
+        'ursprungs_betrag': case.get('principal', saldo),
+        'schuldner_name': case.get('debtor', 'Unbekannt'),
+        'schuldner_anrede': 'Herr/Frau',
+        'aktenzeichen': case.get('nr', ''),
+        'signatur': f"Mit freundlichen Grüßen\n{st.session_state.get('kanzlei_daten', {}).get('name', 'Kanzlei')}"
+    }
+
+    # Ergebnisauswahl
+    ergebnis_optionen = {
+        "✅ Bedingung erfüllt": "erfuellt",
+        "❌ Bedingung nicht erfüllt": "nicht_erfuellt",
+        "⚠️ Teilweise erfüllt": "teilweise",
+        "❓ Nicht prüfbar": "nicht_pruefbar"
+    }
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write(f"**Grund:** {grund}")
+        st.write(f"**Zu prüfen:** {bedingung}")
+        st.write(f"**Offener Betrag:** {fmt_curr(saldo)}")
+
+        ergebnis_label = st.radio(
+            "Ergebnis der Prüfung:",
+            list(ergebnis_optionen.keys()),
+            key="wv_ergebnis_auswahl"
+        )
+        ergebnis = ergebnis_optionen[ergebnis_label]
+
+    with col2:
+        st.write("**Zusätzliche Notizen:**")
+        notizen = st.text_area("Notizen zur Prüfung", key="wv_pruefung_notizen", height=100)
+
+    # Brief generieren
+    if WV_SERVICE_AVAILABLE:
+        st.markdown("#### 📝 Vorgeschlagene Aktion")
+
+        try:
+            from src.services.wiedervorlage_service import WVGrund, WVErgebnis
+
+            wv_grund = WVGrund(grund) if grund in [g.value for g in WVGrund] else WVGrund.SONSTIGES
+            wv_ergebnis = WVErgebnis(ergebnis) if ergebnis in [e.value for e in WVErgebnis] else WVErgebnis.NICHT_PRUEFBAR
+
+            # Aktionen vorschlagen
+            aktionen = {
+                ('zahlungsfrist', 'nicht_erfuellt'): "Letzte Mahnung versenden oder gerichtliches Mahnverfahren einleiten",
+                ('zahlungsfrist', 'teilweise'): "Restzahlung anmahnen oder Ratenzahlung vereinbaren",
+                ('zahlungsfrist', 'erfuellt'): "Akte als erledigt markieren",
+                ('vergleichsfrist', 'nicht_erfuellt'): "Volle Forderung geltend machen",
+                ('vergleichsfrist', 'erfuellt'): "Vergleichszahlung überwachen",
+                ('pruefung', 'nicht_erfuellt'): "Weitere Maßnahmen prüfen oder Akte schließen",
+            }
+
+            aktion = aktionen.get((grund, ergebnis), "Manuelle Prüfung und Entscheidung erforderlich")
+            st.info(f"**Empfehlung:** {aktion}")
+
+            # Briefentwurf generieren
+            wv_service = get_wv_service()
+            brief = wv_service.generiere_brief(wv_grund, wv_ergebnis, case_data)
+
+            if brief:
+                with st.expander("📄 Briefentwurf anzeigen"):
+                    st.text_area("Briefentwurf", brief, height=300, key="wv_brief_entwurf")
+
+                    if st.button("📧 Als Nachricht verwenden"):
+                        st.session_state.compose_prefill = {
+                            'subject': f"WV: {wv.get('titel')} - {case.get('nr', '')}",
+                            'content': brief,
+                            'case_id': case_id
+                        }
+                        st.session_state.page = 'compose'
+                        st.session_state.active_wv_check = None
+                        st.rerun()
+
+        except Exception as e:
+            st.warning(f"Briefgenerierung nicht verfügbar: {e}")
+
+    # Aktionen
+    st.divider()
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("✅ Erledigt markieren", type="primary"):
+            if case_id in st.session_state.wiedervorlagen:
+                for wv_entry in st.session_state.wiedervorlagen[case_id]:
+                    if wv_entry.get('datum') == wv.get('datum') and wv_entry.get('titel') == wv.get('titel'):
+                        wv_entry['erledigt'] = True
+                        wv_entry['erledigt_am'] = datetime.now().isoformat()
+                        wv_entry['ergebnis'] = ergebnis
+                        wv_entry['notizen'] = notizen
+                        break
+            st.session_state.active_wv_check = None
+            st.success("✅ Wiedervorlage erledigt")
+            st.rerun()
+
+    with col2:
+        if st.button("📅 Neu terminieren"):
+            st.session_state.wv_neu_terminieren = True
+
+    with col3:
+        if st.button("❌ Abbrechen"):
+            st.session_state.active_wv_check = None
+            st.rerun()
+
+    # Neu terminieren Dialog
+    if st.session_state.get('wv_neu_terminieren'):
+        st.markdown("#### 📅 Neuer Termin")
+        neues_datum = st.date_input("Neues Datum", value=date.today() + timedelta(days=14))
+        neuer_titel = st.text_input("Titel", value=wv.get('titel', 'Wiedervorlage'))
+
+        if st.button("💾 Neu anlegen"):
+            neue_wv = {
+                'titel': neuer_titel,
+                'datum': neues_datum.isoformat(),
+                'grund': grund,
+                'bedingung': bedingung,
+                'beschreibung': f"Verlängert von {wv.get('datum')}. {notizen}",
+                'erstellt': datetime.now().isoformat()
+            }
+
+            if case_id not in st.session_state.wiedervorlagen:
+                st.session_state.wiedervorlagen[case_id] = []
+            st.session_state.wiedervorlagen[case_id].append(neue_wv)
+
+            # Alte WV als erledigt markieren
+            for wv_entry in st.session_state.wiedervorlagen[case_id]:
+                if wv_entry.get('datum') == wv.get('datum') and wv_entry.get('titel') == wv.get('titel'):
+                    wv_entry['erledigt'] = True
+                    wv_entry['ergebnis'] = 'verlängert'
+                    break
+
+            st.session_state.wv_neu_terminieren = False
+            st.session_state.active_wv_check = None
+            st.success(f"✅ Neue Wiedervorlage für {neues_datum.strftime('%d.%m.%Y')} angelegt")
+            st.rerun()
+
 
 def show_cases_list():
     st.markdown("## 📁 Aktenübersicht")
@@ -3901,19 +4238,42 @@ def show_compose_message():
     """Nachricht verfassen"""
     st.markdown("## ✉️ Nachricht verfassen")
 
+    # Prefill aus WV-Briefentwurf laden
+    prefill = st.session_state.get('compose_prefill')
+    prefill_subject = ""
+    prefill_content = ""
+    prefill_case_id = None
+
+    if prefill:
+        prefill_subject = prefill.get('subject', '')
+        prefill_content = prefill.get('content', '')
+        prefill_case_id = prefill.get('case_id')
+        st.session_state.compose_prefill = None  # Reset nach Verwendung
+        st.info("📝 Nachricht aus Wiedervorlage vorbefüllt")
+
     # Empfänger auswählen
     recipient_type = st.radio("Empfänger", ["Gläubigerin", "Schuldner"], horizontal=True)
 
     # Akte auswählen
-    case_options = ["Ohne Aktenbezug"] + [f"{c['nr']} - {c['debtor']}" for c in DEMO_CASES]
-    selected_case = st.selectbox("Akte", case_options)
+    all_cases = DEMO_CASES + st.session_state.get('imported_cases', [])
+    case_options = ["Ohne Aktenbezug"] + [f"{c['nr']} - {c['debtor']}" for c in all_cases]
+
+    # Vorauswahl falls aus WV
+    default_idx = 0
+    if prefill_case_id:
+        for i, c in enumerate(all_cases):
+            if c['id'] == prefill_case_id:
+                default_idx = i + 1
+                break
+
+    selected_case = st.selectbox("Akte", case_options, index=default_idx)
 
     case = None
     if selected_case != "Ohne Aktenbezug":
         case_nr = selected_case.split(" - ")[0]
-        case = next((c for c in DEMO_CASES if c['nr'] == case_nr), None)
+        case = next((c for c in all_cases if c['nr'] == case_nr), None)
 
-    subject = st.text_input("Betreff")
+    subject = st.text_input("Betreff", value=prefill_subject)
 
     # KI-Unterstützung
     if case:
@@ -3949,9 +4309,10 @@ Bei Interesse melden Sie sich bitte.
 Mit freundlichen Grüßen"""
 
     # Nachrichtentext
+    default_content = prefill_content or st.session_state.get('compose_draft', '')
     content = st.text_area(
         "Nachricht",
-        value=st.session_state.get('compose_draft', ''),
+        value=default_content,
         height=300
     )
 
