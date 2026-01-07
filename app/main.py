@@ -53,6 +53,20 @@ try:
 except ImportError:
     EMAIL_PARSER_AVAILABLE = False
 
+# Wiedervorlage Service (intelligente Fristenerkennung)
+try:
+    from src.services.wiedervorlage_service import (
+        WiedervorlageService,
+        WVGrund,
+        WVBedingung,
+        erkenne_fristen_im_text,
+        erstelle_wv_vorschlaege,
+        get_wv_service
+    )
+    WV_SERVICE_AVAILABLE = True
+except ImportError:
+    WV_SERVICE_AVAILABLE = False
+
 st.set_page_config(
     page_title="InkassoKom - Inkasso-Plattform",
     page_icon="⚖️",
@@ -98,6 +112,13 @@ if 'email_attachments' not in st.session_state:
     st.session_state.email_attachments = {}  # {email_id: [attachment_bytes, ...]}
 if 'unassigned_emails' not in st.session_state:
     st.session_state.unassigned_emails = []  # Emails ohne Akten-Zuordnung
+# Wiedervorlagen
+if 'wiedervorlagen' not in st.session_state:
+    st.session_state.wiedervorlagen = {}  # {case_id: [WV, ...]}
+if 'pending_wv_vorschlaege' not in st.session_state:
+    st.session_state.pending_wv_vorschlaege = None  # Temporär nach Nachrichtenversand
+if 'wv_notifications' not in st.session_state:
+    st.session_state.wv_notifications = []  # Fällige WVs
 # AI & Kommunikation
 if 'openai_api_key' not in st.session_state:
     # Zuerst in Streamlit Secrets nachschauen
@@ -3945,6 +3966,44 @@ Mit freundlichen Grüßen"""
 
     st.divider()
 
+    # WV-Vorschläge anzeigen wenn vorhanden
+    if st.session_state.pending_wv_vorschlaege and case:
+        st.markdown("---")
+        st.markdown("### 📅 Wiedervorlage erkannt")
+        st.info("Im Text wurden Fristen erkannt. Möchten Sie eine Wiedervorlage anlegen?")
+
+        for i, vorschlag in enumerate(st.session_state.pending_wv_vorschlaege):
+            with st.expander(f"📅 {vorschlag.titel} - {vorschlag.datum.strftime('%d.%m.%Y')}", expanded=True):
+                st.write(f"**Erkannter Text:** _{vorschlag.original_text}_")
+                st.write(f"**Grund:** {vorschlag.grund.value}")
+                st.write(f"**Zu prüfen:** {vorschlag.bedingung.value}")
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button(f"✅ WV anlegen", key=f"wv_create_{i}", type="primary"):
+                        # WV speichern
+                        wv_entry = {
+                            'id': f"wv-{case['id']}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                            'titel': vorschlag.titel,
+                            'datum': vorschlag.datum,
+                            'grund': vorschlag.grund.value,
+                            'bedingung': vorschlag.bedingung.value,
+                            'prioritaet': vorschlag.prioritaet,
+                            'erstellt': datetime.now(),
+                            'status': 'offen',
+                            'original_text': vorschlag.original_text
+                        }
+                        if case['id'] not in st.session_state.wiedervorlagen:
+                            st.session_state.wiedervorlagen[case['id']] = []
+                        st.session_state.wiedervorlagen[case['id']].append(wv_entry)
+                        st.success(f"✅ Wiedervorlage für {vorschlag.datum.strftime('%d.%m.%Y')} angelegt!")
+                        st.session_state.pending_wv_vorschlaege = None
+                        st.rerun()
+                with col_b:
+                    if st.button(f"❌ Überspringen", key=f"wv_skip_{i}"):
+                        st.session_state.pending_wv_vorschlaege = None
+                        st.rerun()
+
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("📬 In Postfach senden", type="primary", use_container_width=True):
@@ -3960,6 +4019,15 @@ Mit freundlichen Grüßen"""
 
                 if case:
                     add_case_event(case['id'], 'kommunikation', f"Nachricht an {to_name} gesendet: {subject}")
+
+                # WV-Vorschläge erkennen
+                if WV_SERVICE_AVAILABLE and case:
+                    vorschlaege = erstelle_wv_vorschlaege(f"{subject}\n{content}")
+                    if vorschlaege:
+                        st.session_state.pending_wv_vorschlaege = vorschlaege
+                        st.success("✅ Nachricht gesendet! Fristen erkannt - siehe unten.")
+                        st.session_state.compose_draft = ''
+                        st.rerun()
 
                 st.success("✅ Nachricht gesendet!")
                 st.session_state.compose_draft = ''
@@ -3979,6 +4047,7 @@ Mit freundlichen Grüßen"""
     with col3:
         if st.button("❌ Abbrechen", use_container_width=True):
             st.session_state.compose_draft = ''
+            st.session_state.pending_wv_vorschlaege = None
             st.session_state.page = 'dashboard'
             st.rerun()
 
