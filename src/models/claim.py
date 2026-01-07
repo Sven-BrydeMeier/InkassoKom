@@ -4,7 +4,7 @@ Claim, LedgerBooking, Payment, and PaymentAllocation Models
 Financial data models for tracking claims, bookings, and payments.
 """
 
-from sqlalchemy import Column, String, Text, Float, Date, ForeignKey, Index
+from sqlalchemy import Column, String, Text, Float, Integer, Date, Boolean, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
@@ -93,10 +93,6 @@ class Claim(Base):
 
     def __repr__(self) -> str:
         return f"<Claim(id={self.id}, principal={self.principal})>"
-
-
-# Import Boolean here to avoid issues
-from sqlalchemy import Boolean
 
 
 class LedgerBooking(Base):
@@ -241,7 +237,3 @@ class PaymentAllocation(Base):
 
     def __repr__(self) -> str:
         return f"<PaymentAllocation(payment={self.payment_id}, booking={self.ledger_booking_id})>"
-
-
-# Import Integer
-from sqlalchemy import Integer

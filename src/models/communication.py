@@ -4,10 +4,9 @@ Communication and Message Models
 Tracks all communication related to cases.
 """
 
-from sqlalchemy import Column, String, Text, Boolean, ForeignKey, Index
+from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy import DateTime
 
 from src.models.base import Base
 import enum

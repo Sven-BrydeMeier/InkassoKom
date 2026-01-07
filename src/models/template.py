@@ -4,7 +4,7 @@ Template and Letterhead Models
 Document templates and letterheads for generating letters.
 """
 
-from sqlalchemy import Column, String, Text, Boolean, ForeignKey, Index
+from sqlalchemy import Column, String, Text, Integer, Boolean, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
@@ -107,7 +107,3 @@ class Letterhead(Base, SoftDeleteMixin):
 
     def __repr__(self) -> str:
         return f"<Letterhead(id={self.id}, name='{self.name}')>"
-
-
-# Import Integer
-from sqlalchemy import Integer

@@ -4,10 +4,9 @@ Deadline Model
 Tracks deadlines and reminders for cases.
 """
 
-from sqlalchemy import Column, String, Text, Boolean, Date, ForeignKey, Index
+from sqlalchemy import Column, String, Text, Boolean, Integer, Date, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy import DateTime
 
 from src.models.base import Base
 import enum
@@ -89,7 +88,3 @@ class Deadline(Base):
 
     def __repr__(self) -> str:
         return f"<Deadline(id={self.id}, title='{self.title}')>"
-
-
-# Import Integer
-from sqlalchemy import Integer
