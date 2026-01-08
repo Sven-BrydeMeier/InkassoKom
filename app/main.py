@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.07-1445"
+APP_VERSION = "v2026.01.08-0930"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -1454,7 +1454,18 @@ def show_document_item(doc, case_nr, key_prefix, show_category=False):
                     style="border: 1px solid #ccc; border-radius: 5px;"></iframe>
                 ''', unsafe_allow_html=True)
             else:
-                st.text_area("Inhalt", value=pdf_content.decode('utf-8') if isinstance(pdf_content, bytes) else str(pdf_content),
+                # Versuche Text zu dekodieren, mit Fallback für binäre Inhalte
+                if isinstance(pdf_content, bytes):
+                    try:
+                        text_content = pdf_content.decode('utf-8')
+                    except UnicodeDecodeError:
+                        try:
+                            text_content = pdf_content.decode('latin-1')
+                        except UnicodeDecodeError:
+                            text_content = f"[Binärer Inhalt - {len(pdf_content)} Bytes]"
+                else:
+                    text_content = str(pdf_content)
+                st.text_area("Inhalt", value=text_content,
                     height=200, disabled=True, key=f"{key_prefix}_preview_{doc['id']}")
 
             if st.button("❌ Schließen", key=f"{key_prefix}_close_{doc['id']}"):
