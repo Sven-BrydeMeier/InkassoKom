@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.08-0930"
+APP_VERSION = "v2026.01.09-1015"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -1248,7 +1248,7 @@ def show_document_explorer(case_id, case_nr):
     # Dokument oder Email hinzufügen
     st.markdown("### ➕ Dokument oder Email hinzufügen")
 
-    upload_tab1, upload_tab2 = st.tabs(["📄 Dokument", "📧 Email"])
+    upload_tab1, upload_tab2, upload_tab3 = st.tabs(["📄 Dokument", "📧 Email", "📦 ZIP-Archiv"])
 
     with upload_tab1:
         col1, col2 = st.columns(2)
@@ -1370,6 +1370,198 @@ def show_document_explorer(case_id, case_nr):
                         st.rerun()
         else:
             st.warning("📧 Email-Parser nicht verfügbar. Bitte src/email_parser installieren.")
+
+    with upload_tab3:
+        # ZIP-Archiv Upload
+        st.info("📦 Laden Sie ein ZIP-Archiv hoch, um mehrere Dokumente auf einmal zu importieren.")
+
+        zip_file = st.file_uploader(
+            "ZIP-Datei hochladen",
+            type=['zip'],
+            key=f"zip_upload_{case_id}",
+            help="ZIP-Archive mit PDFs, Bildern und Dokumenten"
+        )
+
+        if zip_file:
+            import zipfile
+            import io
+
+            try:
+                # ZIP entpacken und Inhalt anzeigen
+                zip_buffer = io.BytesIO(zip_file.getvalue())
+                with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                    # Dateien filtern (nur unterstützte Formate)
+                    supported_extensions = {'.pdf', '.docx', '.doc', '.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.eml', '.msg'}
+                    all_files = []
+
+                    for file_info in zf.infolist():
+                        if not file_info.is_dir():
+                            file_ext = os.path.splitext(file_info.filename.lower())[1]
+                            if file_ext in supported_extensions:
+                                all_files.append({
+                                    'name': file_info.filename,
+                                    'size': file_info.file_size,
+                                    'ext': file_ext,
+                                    'compress_size': file_info.compress_size
+                                })
+
+                    if all_files:
+                        st.success(f"📦 **{len(all_files)} Dateien** im Archiv gefunden")
+
+                        # Session State für Auswahl
+                        if f'zip_selection_{case_id}' not in st.session_state:
+                            st.session_state[f'zip_selection_{case_id}'] = {f['name']: True for f in all_files}
+
+                        # Alle auswählen / Keine auswählen
+                        sel_col1, sel_col2 = st.columns(2)
+                        with sel_col1:
+                            if st.button("✅ Alle auswählen", key=f"zip_sel_all_{case_id}"):
+                                st.session_state[f'zip_selection_{case_id}'] = {f['name']: True for f in all_files}
+                                st.rerun()
+                        with sel_col2:
+                            if st.button("❌ Keine auswählen", key=f"zip_sel_none_{case_id}"):
+                                st.session_state[f'zip_selection_{case_id}'] = {f['name']: False for f in all_files}
+                                st.rerun()
+
+                        st.divider()
+
+                        # Dateien nach Typ gruppieren
+                        files_by_type = {}
+                        for f in all_files:
+                            ext = f['ext'].upper().replace('.', '')
+                            if ext not in files_by_type:
+                                files_by_type[ext] = []
+                            files_by_type[ext].append(f)
+
+                        # Dateien mit Checkboxen anzeigen
+                        for file_type, files in sorted(files_by_type.items()):
+                            type_icons = {
+                                'PDF': '📕', 'DOCX': '📘', 'DOC': '📘',
+                                'JPG': '🖼️', 'JPEG': '🖼️', 'PNG': '🖼️', 'GIF': '🖼️', 'TIF': '🖼️', 'TIFF': '🖼️',
+                                'EML': '📧', 'MSG': '📧'
+                            }
+                            icon = type_icons.get(file_type, '📄')
+
+                            with st.expander(f"{icon} **{file_type}** ({len(files)} Dateien)", expanded=True):
+                                for f in files:
+                                    # Nur Dateiname ohne Pfad anzeigen
+                                    display_name = os.path.basename(f['name'])
+                                    size_kb = f['size'] / 1024
+
+                                    col1, col2 = st.columns([4, 1])
+                                    with col1:
+                                        checked = st.checkbox(
+                                            f"{display_name}",
+                                            value=st.session_state[f'zip_selection_{case_id}'].get(f['name'], True),
+                                            key=f"zip_file_{case_id}_{f['name']}"
+                                        )
+                                        st.session_state[f'zip_selection_{case_id}'][f['name']] = checked
+                                    with col2:
+                                        st.caption(f"{size_kb:.1f} KB")
+
+                        # Zähle ausgewählte Dateien
+                        selected_count = sum(1 for v in st.session_state[f'zip_selection_{case_id}'].values() if v)
+
+                        st.divider()
+
+                        # Dokumenttyp für alle
+                        zip_doc_type = st.selectbox(
+                            "Dokumenttyp für alle Dateien",
+                            ["Automatisch erkennen", "Rechnung", "Mahnung", "Vertrag", "Mahnbescheid",
+                             "Vollstreckungsbescheid", "Schreiben", "Notiz", "Sonstiges"],
+                            key=f"zip_doc_type_{case_id}"
+                        )
+
+                        zip_doc_category = st.selectbox(
+                            "Kategorie für alle Dateien",
+                            [(k, v['name']) for k, v in DOCUMENT_CATEGORIES.items()],
+                            format_func=lambda x: x[1],
+                            key=f"zip_doc_cat_{case_id}"
+                        )[0]
+
+                        # Import-Button
+                        if st.button(
+                            f"📥 {selected_count} Dateien importieren",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=selected_count == 0,
+                            key=f"zip_import_{case_id}"
+                        ):
+                            imported_count = 0
+                            errors = []
+
+                            # ZIP erneut öffnen für den Import
+                            zip_buffer.seek(0)
+                            with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                                for f in all_files:
+                                    if st.session_state[f'zip_selection_{case_id}'].get(f['name'], False):
+                                        try:
+                                            # Datei aus ZIP extrahieren
+                                            file_data = zf.read(f['name'])
+                                            display_name = os.path.basename(f['name'])
+
+                                            # Dokumenttyp bestimmen
+                                            if zip_doc_type == "Automatisch erkennen":
+                                                # Einfache Erkennung basierend auf Dateinamen
+                                                name_lower = display_name.lower()
+                                                if 'rechnung' in name_lower or 'invoice' in name_lower:
+                                                    doc_type = 'Rechnung'
+                                                elif 'mahnung' in name_lower:
+                                                    doc_type = 'Mahnung'
+                                                elif 'vertrag' in name_lower or 'contract' in name_lower:
+                                                    doc_type = 'Vertrag'
+                                                elif 'mahnbescheid' in name_lower:
+                                                    doc_type = 'Mahnbescheid'
+                                                elif 'vollstreckung' in name_lower:
+                                                    doc_type = 'Vollstreckungsbescheid'
+                                                else:
+                                                    doc_type = 'Sonstiges'
+                                            else:
+                                                doc_type = zip_doc_type
+
+                                            # Neues Dokument erstellen
+                                            doc_id = f'zip-{case_id}-{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
+                                            new_doc = {
+                                                'id': doc_id,
+                                                'name': display_name,
+                                                'date': date.today(),
+                                                'type': doc_type,
+                                                'size': f'{len(file_data) // 1024} KB',
+                                                'category': zip_doc_category
+                                            }
+
+                                            # Zu DEMO_DOCUMENTS hinzufügen
+                                            if case_id not in DEMO_DOCUMENTS:
+                                                DEMO_DOCUMENTS[case_id] = []
+                                            DEMO_DOCUMENTS[case_id].append(new_doc)
+
+                                            # PDF-Daten speichern falls PDF
+                                            if f['ext'].lower() == '.pdf':
+                                                st.session_state.document_pdfs[doc_id] = file_data
+
+                                            imported_count += 1
+                                        except Exception as e:
+                                            errors.append(f"{f['name']}: {str(e)}")
+
+                            if imported_count > 0:
+                                st.success(f"✅ {imported_count} Dateien erfolgreich importiert!")
+                            if errors:
+                                for err in errors:
+                                    st.error(f"❌ {err}")
+
+                            # Auswahl zurücksetzen
+                            if f'zip_selection_{case_id}' in st.session_state:
+                                del st.session_state[f'zip_selection_{case_id}']
+
+                            st.rerun()
+                    else:
+                        st.warning("⚠️ Keine unterstützten Dateien im Archiv gefunden.")
+                        st.caption("Unterstützte Formate: PDF, DOCX, JPG, PNG, GIF, TIF, EML, MSG")
+
+            except zipfile.BadZipFile:
+                st.error("❌ Ungültige ZIP-Datei. Bitte laden Sie ein gültiges ZIP-Archiv hoch.")
+            except Exception as e:
+                st.error(f"❌ Fehler beim Verarbeiten: {str(e)}")
 
 def get_document_pdf(doc, case_nr):
     """
