@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.09-1130"
+APP_VERSION = "v2026.01.09-1200"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -2883,26 +2883,93 @@ def show_zip_import():
 
     st.divider()
 
-    # Ziel-Akte auswählen
+    # Ziel-Akte auswählen oder neue Akte anlegen
     all_cases = get_all_cases()
-    if not all_cases:
-        st.warning("⚠️ Keine Akten vorhanden. Bitte erstellen Sie zuerst eine Akte oder importieren Sie eine RA-Micro Akte.")
-        if st.button("➕ Neue Akte erstellen"):
-            st.session_state.page = 'new_case'
-            st.rerun()
-        if st.button("📂 RA-Micro Akte importieren"):
-            st.session_state.page = 'ra_micro_import'
-            st.rerun()
-        return
 
-    case_options = {f"{c['nr']} - {c['debtor']}": c['id'] for c in all_cases}
-    selected_case_label = st.selectbox(
-        "📁 Ziel-Akte auswählen",
-        options=list(case_options.keys()),
-        help="Die Dokumente werden dieser Akte zugeordnet"
+    # Option: Bestehende Akte oder neue Akte
+    case_target = st.radio(
+        "Ziel für Import",
+        ["📁 Bestehende Akte", "➕ Neue Akte anlegen"],
+        horizontal=True,
+        key="zip_case_target"
     )
-    target_case_id = case_options[selected_case_label]
-    target_case = next((c for c in all_cases if c['id'] == target_case_id), None)
+
+    target_case_id = None
+    target_case = None
+
+    if case_target == "📁 Bestehende Akte":
+        if not all_cases:
+            st.warning("⚠️ Keine Akten vorhanden. Bitte wählen Sie 'Neue Akte anlegen'.")
+        else:
+            case_options = {f"{c['nr']} - {c['debtor']}": c['id'] for c in all_cases}
+            selected_case_label = st.selectbox(
+                "📁 Ziel-Akte auswählen",
+                options=list(case_options.keys()),
+                help="Die Dokumente werden dieser Akte zugeordnet"
+            )
+            target_case_id = case_options[selected_case_label]
+            target_case = next((c for c in all_cases if c['id'] == target_case_id), None)
+
+    else:  # Neue Akte anlegen
+        st.markdown("##### 📝 Neue Akte anlegen")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            new_case_nr = st.text_input(
+                "Aktenzeichen *",
+                placeholder="z.B. 1/25",
+                key="zip_new_case_nr"
+            )
+            new_creditor = st.text_input(
+                "Gläubiger (Mandant) *",
+                placeholder="z.B. Mustermann GmbH",
+                key="zip_new_creditor"
+            )
+            new_creditor_addr = st.text_area(
+                "Adresse Gläubiger",
+                placeholder="Straße, PLZ Ort",
+                height=80,
+                key="zip_new_creditor_addr"
+            )
+
+        with col2:
+            new_debtor = st.text_input(
+                "Schuldner (Gegner) *",
+                placeholder="z.B. Max Müller",
+                key="zip_new_debtor"
+            )
+            new_debtor_addr = st.text_area(
+                "Adresse Schuldner",
+                placeholder="Straße, PLZ Ort",
+                height=80,
+                key="zip_new_debtor_addr"
+            )
+            new_principal = st.number_input(
+                "Hauptforderung (€)",
+                min_value=0.0,
+                value=0.0,
+                step=100.0,
+                key="zip_new_principal"
+            )
+
+        new_subject = st.text_input(
+            "Betreff / Gegenstand",
+            placeholder="z.B. Offene Rechnung 2024-001",
+            key="zip_new_subject"
+        )
+
+        # Validierung
+        if new_case_nr and new_creditor and new_debtor:
+            st.success(f"✅ Neue Akte: **{new_case_nr}** - {new_creditor} ./. {new_debtor}")
+            # Temporäres Case-Objekt für die Anzeige
+            target_case = {
+                'nr': new_case_nr,
+                'creditor': new_creditor,
+                'debtor': new_debtor,
+                'id': None  # Wird beim Import erstellt
+            }
+        else:
+            st.warning("⚠️ Bitte füllen Sie mindestens Aktenzeichen, Gläubiger und Schuldner aus.")
 
     st.divider()
 
@@ -2913,7 +2980,7 @@ def show_zip_import():
         help="ZIP-Archive mit PDFs, Bildern und Dokumenten"
     )
 
-    if zip_file:
+    if zip_file and (target_case_id or (case_target == "➕ Neue Akte anlegen" and target_case)):
         import zipfile
 
         st.success(f"✅ Datei geladen: {zip_file.name} ({zip_file.size / 1024:.1f} KB)")
@@ -3020,90 +3087,134 @@ def show_zip_import():
                     # Import-Button
                     selected_count = sum(1 for f in all_files if st.session_state.zip_import_selection.get(f['name'], False))
 
+                    # Button-Text je nach Modus
+                    if case_target == "➕ Neue Akte anlegen":
+                        btn_text = f"📥 Neue Akte anlegen & {selected_count} Dateien importieren"
+                    else:
+                        btn_text = f"📥 {selected_count} Dateien in Akte '{target_case.get('nr', '')}' importieren"
+
                     if st.button(
-                        f"📥 {selected_count} Dateien in Akte '{target_case.get('nr', '')}' importieren",
+                        btn_text,
                         type="primary",
                         use_container_width=True,
                         disabled=selected_count == 0
                     ):
                         imported_count = 0
                         errors = []
+                        actual_case_id = target_case_id
 
-                        # ZIP erneut öffnen für den Import
-                        zip_buffer.seek(0)
-                        with zipfile.ZipFile(zip_buffer, 'r') as zf:
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
+                        # Falls neue Akte: Erst die Akte anlegen
+                        if case_target == "➕ Neue Akte anlegen" and target_case.get('id') is None:
+                            try:
+                                # Neue Case-ID generieren
+                                actual_case_id = f'zip-case-{datetime.now().strftime("%Y%m%d%H%M%S")}'
 
-                            for idx, f in enumerate(all_files):
-                                if st.session_state.zip_import_selection.get(f['name'], False):
-                                    try:
-                                        status_text.text(f"Importiere: {os.path.basename(f['name'])}...")
+                                # Neue Akte erstellen
+                                new_case = {
+                                    'id': actual_case_id,
+                                    'nr': st.session_state.get('zip_new_case_nr', ''),
+                                    'creditor': st.session_state.get('zip_new_creditor', ''),
+                                    'creditor_address': st.session_state.get('zip_new_creditor_addr', ''),
+                                    'debtor': st.session_state.get('zip_new_debtor', ''),
+                                    'debtor_address': st.session_state.get('zip_new_debtor_addr', ''),
+                                    'subject': st.session_state.get('zip_new_subject', ''),
+                                    'principal': st.session_state.get('zip_new_principal', 0),
+                                    'interest': 5.0,
+                                    'status': 'offen',
+                                    'dunning': 'nicht_beantragt',
+                                    'enforcement': 'nicht_begonnen',
+                                    'due_date': date.today(),
+                                    'created': datetime.now(),
+                                    'source_zip': zip_file.name
+                                }
 
-                                        # Datei aus ZIP extrahieren
-                                        file_data = zf.read(f['name'])
-                                        display_name = os.path.basename(f['name'])
+                                # Zu imported_cases hinzufügen
+                                if 'imported_cases' not in st.session_state:
+                                    st.session_state.imported_cases = []
+                                st.session_state.imported_cases.append(new_case)
 
-                                        # Dokumenttyp bestimmen
-                                        if zip_doc_type == "Automatisch erkennen":
-                                            name_lower = display_name.lower()
-                                            if 'rechnung' in name_lower or 'invoice' in name_lower:
-                                                doc_type = 'Rechnung'
-                                            elif 'mahnung' in name_lower:
-                                                doc_type = 'Mahnung'
-                                            elif 'vertrag' in name_lower or 'contract' in name_lower:
-                                                doc_type = 'Vertrag'
-                                            elif 'mahnbescheid' in name_lower:
-                                                doc_type = 'Mahnbescheid'
-                                            elif 'vollstreckung' in name_lower:
-                                                doc_type = 'Vollstreckungsbescheid'
+                                st.info(f"📁 Akte **{new_case['nr']}** wird angelegt...")
+
+                            except Exception as e:
+                                st.error(f"❌ Fehler beim Anlegen der Akte: {str(e)}")
+                                actual_case_id = None
+
+                        if actual_case_id:
+                            # ZIP erneut öffnen für den Import
+                            zip_buffer.seek(0)
+                            with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+
+                                for idx, f in enumerate(all_files):
+                                    if st.session_state.zip_import_selection.get(f['name'], False):
+                                        try:
+                                            status_text.text(f"Importiere: {os.path.basename(f['name'])}...")
+
+                                            # Datei aus ZIP extrahieren
+                                            file_data = zf.read(f['name'])
+                                            display_name = os.path.basename(f['name'])
+
+                                            # Dokumenttyp bestimmen
+                                            if zip_doc_type == "Automatisch erkennen":
+                                                name_lower = display_name.lower()
+                                                if 'rechnung' in name_lower or 'invoice' in name_lower:
+                                                    doc_type = 'Rechnung'
+                                                elif 'mahnung' in name_lower:
+                                                    doc_type = 'Mahnung'
+                                                elif 'vertrag' in name_lower or 'contract' in name_lower:
+                                                    doc_type = 'Vertrag'
+                                                elif 'mahnbescheid' in name_lower:
+                                                    doc_type = 'Mahnbescheid'
+                                                elif 'vollstreckung' in name_lower:
+                                                    doc_type = 'Vollstreckungsbescheid'
+                                                else:
+                                                    doc_type = 'Sonstiges'
                                             else:
-                                                doc_type = 'Sonstiges'
-                                        else:
-                                            doc_type = zip_doc_type
+                                                doc_type = zip_doc_type
 
-                                        # Neues Dokument erstellen
-                                        doc_id = f'zip-{target_case_id}-{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
-                                        new_doc = {
-                                            'id': doc_id,
-                                            'name': display_name,
-                                            'date': date.today(),
-                                            'type': doc_type,
-                                            'size': f'{len(file_data) // 1024} KB',
-                                            'category': zip_doc_category,
-                                            'source': f'ZIP: {zip_file.name}'
-                                        }
+                                            # Neues Dokument erstellen
+                                            doc_id = f'zip-{actual_case_id}-{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
+                                            new_doc = {
+                                                'id': doc_id,
+                                                'name': display_name,
+                                                'date': date.today(),
+                                                'type': doc_type,
+                                                'size': f'{len(file_data) // 1024} KB',
+                                                'category': zip_doc_category,
+                                                'source': f'ZIP: {zip_file.name}'
+                                            }
 
-                                        # Zu DEMO_DOCUMENTS hinzufügen
-                                        if target_case_id not in DEMO_DOCUMENTS:
-                                            DEMO_DOCUMENTS[target_case_id] = []
-                                        DEMO_DOCUMENTS[target_case_id].append(new_doc)
+                                            # Zu DEMO_DOCUMENTS hinzufügen
+                                            if actual_case_id not in DEMO_DOCUMENTS:
+                                                DEMO_DOCUMENTS[actual_case_id] = []
+                                            DEMO_DOCUMENTS[actual_case_id].append(new_doc)
 
-                                        # PDF-Daten speichern falls PDF
-                                        if f['ext'].lower() == '.pdf':
-                                            st.session_state.document_pdfs[doc_id] = file_data
+                                            # PDF-Daten speichern falls PDF
+                                            if f['ext'].lower() == '.pdf':
+                                                st.session_state.document_pdfs[doc_id] = file_data
 
-                                        imported_count += 1
-                                    except Exception as e:
-                                        errors.append(f"{f['name']}: {str(e)}")
+                                            imported_count += 1
+                                        except Exception as e:
+                                            errors.append(f"{f['name']}: {str(e)}")
 
-                                progress_bar.progress((idx + 1) / len(all_files))
+                                    progress_bar.progress((idx + 1) / len(all_files))
 
-                            status_text.empty()
-                            progress_bar.empty()
+                                status_text.empty()
+                                progress_bar.empty()
 
-                        if imported_count > 0:
-                            st.success(f"✅ **{imported_count} Dateien** erfolgreich in Akte **{target_case.get('nr', '')}** importiert!")
-                            st.balloons()
+                            if imported_count > 0:
+                                st.success(f"✅ **{imported_count} Dateien** erfolgreich in Akte **{target_case.get('nr', '')}** importiert!")
+                                st.balloons()
 
-                        if errors:
-                            with st.expander(f"⚠️ {len(errors)} Fehler beim Import"):
-                                for err in errors:
-                                    st.error(f"❌ {err}")
+                            if errors:
+                                with st.expander(f"⚠️ {len(errors)} Fehler beim Import"):
+                                    for err in errors:
+                                        st.error(f"❌ {err}")
 
-                        # Auswahl zurücksetzen
-                        if 'zip_import_selection' in st.session_state:
-                            del st.session_state['zip_import_selection']
+                            # Auswahl zurücksetzen
+                            if 'zip_import_selection' in st.session_state:
+                                del st.session_state['zip_import_selection']
 
                 else:
                     st.warning("⚠️ Keine unterstützten Dateien im Archiv gefunden.")
