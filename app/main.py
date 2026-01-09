@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.09-1230"
+APP_VERSION = "v2026.01.09-1245"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -2989,28 +2989,26 @@ def show_zip_import():
         zip_password = None
         zip_buffer = io.BytesIO(zip_file.getvalue())
 
-        # Prüfen ob ZIP passwortgeschützt ist
+        # Prüfen ob ZIP passwortgeschützt ist (über flag_bits, Bit 0 = verschlüsselt)
         try:
             with zipfile.ZipFile(zip_buffer, 'r') as zf_test:
-                # Versuche erste Datei zu lesen um zu prüfen ob verschlüsselt
-                for file_info in zf_test.infolist():
-                    if not file_info.is_dir():
-                        try:
-                            zf_test.read(file_info.filename)
-                            break  # Keine Verschlüsselung
-                        except RuntimeError as e:
-                            if 'encrypted' in str(e).lower() or 'password' in str(e).lower():
-                                st.warning("🔐 Diese ZIP-Datei ist passwortgeschützt.")
-                                zip_password = st.text_input(
-                                    "Passwort eingeben",
-                                    type="password",
-                                    key="zip_password",
-                                    help="Geben Sie das Passwort für die ZIP-Datei ein"
-                                )
-                                if not zip_password:
-                                    st.info("Bitte geben Sie das Passwort ein, um fortzufahren.")
-                                    return
-                            break
+                # Prüfe flag_bits der Dateien - Bit 0 zeigt Verschlüsselung an
+                is_encrypted = any(
+                    (info.flag_bits & 0x1) != 0
+                    for info in zf_test.infolist()
+                    if not info.is_dir()
+                )
+                if is_encrypted:
+                    st.warning("🔐 Diese ZIP-Datei ist passwortgeschützt.")
+                    zip_password = st.text_input(
+                        "Passwort eingeben",
+                        type="password",
+                        key="zip_password",
+                        help="Geben Sie das Passwort für die ZIP-Datei ein"
+                    )
+                    if not zip_password:
+                        st.info("Bitte geben Sie das Passwort ein, um fortzufahren.")
+                        return
         except zipfile.BadZipFile:
             st.error("❌ Ungültige ZIP-Datei.")
             return
