@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.09-1015"
+APP_VERSION = "v2026.01.09-1130"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -2866,6 +2866,255 @@ def show_ra_micro_import():
                 st.write(f"**Quelle:** {case.get('source_pdf', 'Unbekannt')}")
                 st.write(f"**Importiert:** {case['created'].strftime('%d.%m.%Y %H:%M')}")
 
+
+# =============================================================================
+# ZIP-IMPORT - Dokumente aus ZIP-Archiv importieren
+# =============================================================================
+def show_zip_import():
+    """ZIP-Datei Import Seite - Dokumente aus ZIP-Archiv importieren"""
+    st.markdown("## 📦 ZIP-Datei Import")
+    st.info("""
+    **Importieren Sie Dokumente aus einem ZIP-Archiv:**
+    - Laden Sie eine ZIP-Datei mit mehreren Dokumenten hoch
+    - Unterstützte Formate: PDF, DOCX, JPG, PNG, GIF, TIF, EML, MSG
+    - Wählen Sie die Ziel-Akte aus
+    - Alle oder einzelne Dateien importieren
+    """)
+
+    st.divider()
+
+    # Ziel-Akte auswählen
+    all_cases = get_all_cases()
+    if not all_cases:
+        st.warning("⚠️ Keine Akten vorhanden. Bitte erstellen Sie zuerst eine Akte oder importieren Sie eine RA-Micro Akte.")
+        if st.button("➕ Neue Akte erstellen"):
+            st.session_state.page = 'new_case'
+            st.rerun()
+        if st.button("📂 RA-Micro Akte importieren"):
+            st.session_state.page = 'ra_micro_import'
+            st.rerun()
+        return
+
+    case_options = {f"{c['nr']} - {c['debtor']}": c['id'] for c in all_cases}
+    selected_case_label = st.selectbox(
+        "📁 Ziel-Akte auswählen",
+        options=list(case_options.keys()),
+        help="Die Dokumente werden dieser Akte zugeordnet"
+    )
+    target_case_id = case_options[selected_case_label]
+    target_case = next((c for c in all_cases if c['id'] == target_case_id), None)
+
+    st.divider()
+
+    # ZIP-Datei Upload
+    zip_file = st.file_uploader(
+        "📦 ZIP-Datei hochladen",
+        type=['zip'],
+        help="ZIP-Archive mit PDFs, Bildern und Dokumenten"
+    )
+
+    if zip_file:
+        import zipfile
+
+        st.success(f"✅ Datei geladen: {zip_file.name} ({zip_file.size / 1024:.1f} KB)")
+
+        try:
+            # ZIP entpacken und Inhalt anzeigen
+            zip_buffer = io.BytesIO(zip_file.getvalue())
+            with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                # Dateien filtern (nur unterstützte Formate)
+                supported_extensions = {'.pdf', '.docx', '.doc', '.jpg', '.jpeg', '.png', '.gif', '.tif', '.tiff', '.eml', '.msg'}
+                all_files = []
+
+                for file_info in zf.infolist():
+                    if not file_info.is_dir():
+                        file_ext = os.path.splitext(file_info.filename.lower())[1]
+                        if file_ext in supported_extensions:
+                            all_files.append({
+                                'name': file_info.filename,
+                                'size': file_info.file_size,
+                                'ext': file_ext,
+                                'compress_size': file_info.compress_size
+                            })
+
+                if all_files:
+                    st.markdown(f"### 📋 Inhalt des Archivs ({len(all_files)} Dateien)")
+
+                    # Session State für Auswahl
+                    if 'zip_import_selection' not in st.session_state:
+                        st.session_state.zip_import_selection = {f['name']: True for f in all_files}
+
+                    # Alle auswählen / Keine auswählen
+                    sel_col1, sel_col2, sel_col3 = st.columns(3)
+                    with sel_col1:
+                        if st.button("✅ Alle auswählen", key="zip_page_sel_all"):
+                            st.session_state.zip_import_selection = {f['name']: True for f in all_files}
+                            st.rerun()
+                    with sel_col2:
+                        if st.button("❌ Keine auswählen", key="zip_page_sel_none"):
+                            st.session_state.zip_import_selection = {f['name']: False for f in all_files}
+                            st.rerun()
+                    with sel_col3:
+                        selected_count = sum(1 for f in all_files if st.session_state.zip_import_selection.get(f['name'], True))
+                        st.metric("Ausgewählt", f"{selected_count} / {len(all_files)}")
+
+                    st.divider()
+
+                    # Dateien nach Typ gruppieren
+                    files_by_type = {}
+                    for f in all_files:
+                        ext = f['ext'].upper().replace('.', '')
+                        if ext not in files_by_type:
+                            files_by_type[ext] = []
+                        files_by_type[ext].append(f)
+
+                    # Dateien mit Checkboxen anzeigen
+                    for file_type, files in sorted(files_by_type.items()):
+                        type_icons = {
+                            'PDF': '📕', 'DOCX': '📘', 'DOC': '📘',
+                            'JPG': '🖼️', 'JPEG': '🖼️', 'PNG': '🖼️', 'GIF': '🖼️', 'TIF': '🖼️', 'TIFF': '🖼️',
+                            'EML': '📧', 'MSG': '📧'
+                        }
+                        icon = type_icons.get(file_type, '📄')
+
+                        with st.expander(f"{icon} **{file_type}** ({len(files)} Dateien)", expanded=True):
+                            for f in files:
+                                # Nur Dateiname ohne Pfad anzeigen
+                                display_name = os.path.basename(f['name'])
+                                size_kb = f['size'] / 1024
+
+                                col1, col2 = st.columns([4, 1])
+                                with col1:
+                                    checked = st.checkbox(
+                                        f"{display_name}",
+                                        value=st.session_state.zip_import_selection.get(f['name'], True),
+                                        key=f"zip_page_file_{f['name']}"
+                                    )
+                                    st.session_state.zip_import_selection[f['name']] = checked
+                                with col2:
+                                    st.caption(f"{size_kb:.1f} KB")
+
+                    st.divider()
+
+                    # Import-Optionen
+                    st.markdown("### ⚙️ Import-Optionen")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        zip_doc_type = st.selectbox(
+                            "Dokumenttyp für alle Dateien",
+                            ["Automatisch erkennen", "Rechnung", "Mahnung", "Vertrag", "Mahnbescheid",
+                             "Vollstreckungsbescheid", "Schreiben", "Notiz", "Sonstiges"],
+                            key="zip_page_doc_type"
+                        )
+                    with col2:
+                        zip_doc_category = st.selectbox(
+                            "Kategorie für alle Dateien",
+                            [(k, v['name']) for k, v in DOCUMENT_CATEGORIES.items()],
+                            format_func=lambda x: x[1],
+                            key="zip_page_doc_cat"
+                        )[0]
+
+                    st.divider()
+
+                    # Import-Button
+                    selected_count = sum(1 for f in all_files if st.session_state.zip_import_selection.get(f['name'], False))
+
+                    if st.button(
+                        f"📥 {selected_count} Dateien in Akte '{target_case.get('nr', '')}' importieren",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=selected_count == 0
+                    ):
+                        imported_count = 0
+                        errors = []
+
+                        # ZIP erneut öffnen für den Import
+                        zip_buffer.seek(0)
+                        with zipfile.ZipFile(zip_buffer, 'r') as zf:
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+
+                            for idx, f in enumerate(all_files):
+                                if st.session_state.zip_import_selection.get(f['name'], False):
+                                    try:
+                                        status_text.text(f"Importiere: {os.path.basename(f['name'])}...")
+
+                                        # Datei aus ZIP extrahieren
+                                        file_data = zf.read(f['name'])
+                                        display_name = os.path.basename(f['name'])
+
+                                        # Dokumenttyp bestimmen
+                                        if zip_doc_type == "Automatisch erkennen":
+                                            name_lower = display_name.lower()
+                                            if 'rechnung' in name_lower or 'invoice' in name_lower:
+                                                doc_type = 'Rechnung'
+                                            elif 'mahnung' in name_lower:
+                                                doc_type = 'Mahnung'
+                                            elif 'vertrag' in name_lower or 'contract' in name_lower:
+                                                doc_type = 'Vertrag'
+                                            elif 'mahnbescheid' in name_lower:
+                                                doc_type = 'Mahnbescheid'
+                                            elif 'vollstreckung' in name_lower:
+                                                doc_type = 'Vollstreckungsbescheid'
+                                            else:
+                                                doc_type = 'Sonstiges'
+                                        else:
+                                            doc_type = zip_doc_type
+
+                                        # Neues Dokument erstellen
+                                        doc_id = f'zip-{target_case_id}-{datetime.now().strftime("%Y%m%d%H%M%S%f")}'
+                                        new_doc = {
+                                            'id': doc_id,
+                                            'name': display_name,
+                                            'date': date.today(),
+                                            'type': doc_type,
+                                            'size': f'{len(file_data) // 1024} KB',
+                                            'category': zip_doc_category,
+                                            'source': f'ZIP: {zip_file.name}'
+                                        }
+
+                                        # Zu DEMO_DOCUMENTS hinzufügen
+                                        if target_case_id not in DEMO_DOCUMENTS:
+                                            DEMO_DOCUMENTS[target_case_id] = []
+                                        DEMO_DOCUMENTS[target_case_id].append(new_doc)
+
+                                        # PDF-Daten speichern falls PDF
+                                        if f['ext'].lower() == '.pdf':
+                                            st.session_state.document_pdfs[doc_id] = file_data
+
+                                        imported_count += 1
+                                    except Exception as e:
+                                        errors.append(f"{f['name']}: {str(e)}")
+
+                                progress_bar.progress((idx + 1) / len(all_files))
+
+                            status_text.empty()
+                            progress_bar.empty()
+
+                        if imported_count > 0:
+                            st.success(f"✅ **{imported_count} Dateien** erfolgreich in Akte **{target_case.get('nr', '')}** importiert!")
+                            st.balloons()
+
+                        if errors:
+                            with st.expander(f"⚠️ {len(errors)} Fehler beim Import"):
+                                for err in errors:
+                                    st.error(f"❌ {err}")
+
+                        # Auswahl zurücksetzen
+                        if 'zip_import_selection' in st.session_state:
+                            del st.session_state['zip_import_selection']
+
+                else:
+                    st.warning("⚠️ Keine unterstützten Dateien im Archiv gefunden.")
+                    st.caption("**Unterstützte Formate:** PDF, DOCX, DOC, JPG, PNG, GIF, TIF, EML, MSG")
+
+        except zipfile.BadZipFile:
+            st.error("❌ Ungültige ZIP-Datei. Bitte laden Sie ein gültiges ZIP-Archiv hoch.")
+        except Exception as e:
+            st.error(f"❌ Fehler beim Verarbeiten: {str(e)}")
+
+
 # =============================================================================
 # EMAILVERKEHR - Intelligenter Ordner für alle Emails
 # =============================================================================
@@ -3251,9 +3500,15 @@ def lawyer_dashboard():
         if st.button("➕ Neue Akte", use_container_width=True):
             st.session_state.page = 'new_case'
             st.rerun()
-        if st.button("📥 RA-Micro Import", use_container_width=True):
-            st.session_state.page = 'ra_micro_import'
-            st.rerun()
+
+        # Datenimport-Bereich
+        with st.expander("📥 **Datenimport**", expanded=False):
+            if st.button("📂 RA-Micro Akte", use_container_width=True, key="menu_ra_micro"):
+                st.session_state.page = 'ra_micro_import'
+                st.rerun()
+            if st.button("📦 ZIP-Datei Import", use_container_width=True, key="menu_zip_import"):
+                st.session_state.page = 'zip_import'
+                st.rerun()
 
         # Posteingang mit Unread-Badge
         inbox_label = f"📬 Posteingang ({unread})" if unread > 0 else "📬 Posteingang"
@@ -3319,6 +3574,7 @@ def lawyer_dashboard():
     elif page == 'compose': show_compose_message()
     elif page == 'settings': show_settings()
     elif page == 'ra_micro_import': show_ra_micro_import()
+    elif page == 'zip_import': show_zip_import()
     elif page == 'emailverkehr': show_emailverkehr()
     elif page == 'dunning': show_dunning()
     elif page == 'klage': show_klage_entwurf()
