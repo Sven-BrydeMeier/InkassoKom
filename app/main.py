@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.09-1245"
+APP_VERSION = "v2026.01.09-1300"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -2983,35 +2983,38 @@ def show_zip_import():
     if zip_file and (target_case_id or (case_target == "➕ Neue Akte anlegen" and target_case)):
         import zipfile
 
+        # Reset password flag wenn neue Datei hochgeladen wird
+        current_zip_name = zip_file.name
+        if st.session_state.get('last_zip_name') != current_zip_name:
+            st.session_state['zip_needs_password'] = False
+            st.session_state['last_zip_name'] = current_zip_name
+
         st.success(f"✅ Datei geladen: {zip_file.name} ({zip_file.size / 1024:.1f} KB)")
 
-        # Passwort-Eingabe (optional)
-        zip_password = None
         zip_buffer = io.BytesIO(zip_file.getvalue())
 
-        # Prüfen ob ZIP passwortgeschützt ist (über flag_bits, Bit 0 = verschlüsselt)
+        # ZIP-Datei validieren
         try:
             with zipfile.ZipFile(zip_buffer, 'r') as zf_test:
-                # Prüfe flag_bits der Dateien - Bit 0 zeigt Verschlüsselung an
-                is_encrypted = any(
-                    (info.flag_bits & 0x1) != 0
-                    for info in zf_test.infolist()
-                    if not info.is_dir()
-                )
-                if is_encrypted:
-                    st.warning("🔐 Diese ZIP-Datei ist passwortgeschützt.")
-                    zip_password = st.text_input(
-                        "Passwort eingeben",
-                        type="password",
-                        key="zip_password",
-                        help="Geben Sie das Passwort für die ZIP-Datei ein"
-                    )
-                    if not zip_password:
-                        st.info("Bitte geben Sie das Passwort ein, um fortzufahren.")
-                        return
+                # Nur prüfen ob es eine gültige ZIP ist
+                _ = zf_test.namelist()
         except zipfile.BadZipFile:
             st.error("❌ Ungültige ZIP-Datei.")
             return
+
+        # Passwort nur anzeigen wenn explizit angefordert (über Session State)
+        zip_password = None
+        if st.session_state.get('zip_needs_password', False):
+            st.warning("🔐 Diese ZIP-Datei ist passwortgeschützt.")
+            zip_password = st.text_input(
+                "Passwort eingeben",
+                type="password",
+                key="zip_password_field",
+                help="Geben Sie das Passwort für die ZIP-Datei ein"
+            )
+            if not zip_password:
+                st.info("Bitte geben Sie das Passwort ein, um fortzufahren.")
+                return
 
         try:
             # ZIP entpacken und Inhalt anzeigen
@@ -3229,6 +3232,14 @@ def show_zip_import():
                                                 st.session_state.document_pdfs[doc_id] = file_data
 
                                             imported_count += 1
+                                        except RuntimeError as e:
+                                            error_msg = str(e).lower()
+                                            if 'encrypted' in error_msg or 'password' in error_msg or 'bad password' in error_msg:
+                                                st.session_state['zip_needs_password'] = True
+                                                st.error("🔐 Diese ZIP-Datei ist passwortgeschützt. Bitte Passwort eingeben.")
+                                                st.rerun()
+                                            else:
+                                                errors.append(f"{f['name']}: {str(e)}")
                                         except Exception as e:
                                             errors.append(f"{f['name']}: {str(e)}")
 
