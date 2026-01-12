@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.09-1300"
+APP_VERSION = "v2026.01.12-1015"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -1807,12 +1807,127 @@ def get_pdf_page_count(pdf_bytes):
         return 0
 
 
+def extract_documents_from_bookmarks(pdf_reader, num_pages):
+    """
+    Extrahiert Dokumente aus PDF-Lesezeichen (Bookmarks/Outlines).
+
+    Args:
+        pdf_reader: PyPDF2 PdfReader Objekt
+        num_pages: Gesamtzahl der Seiten
+
+    Returns:
+        Liste von Dokumenten mit {name, type, category, start_page, end_page} oder leere Liste
+    """
+    try:
+        outlines = pdf_reader.outline
+        if not outlines:
+            return []
+
+        # Dokumenttypen mit Kategorien
+        doc_type_categories = {
+            'rechnung': 'aussergerichtlich',
+            'mahnung': 'aussergerichtlich',
+            'forderungsaufstellung': 'aussergerichtlich',
+            'vertrag': 'aussergerichtlich',
+            'lieferschein': 'aussergerichtlich',
+            'mahnbescheid': 'gerichtlich',
+            'vollstreckungsbescheid': 'gerichtlich',
+            'pfüb': 'gerichtlich',
+            'klage': 'gerichtlich',
+            'urteil': 'gerichtlich',
+            'beschluss': 'gerichtlich',
+            'zustellung': 'gerichtlich',
+            'schreiben': 'aussergerichtlich',
+            'brief': 'aussergerichtlich',
+            'notiz': 'intern',
+            'vermerk': 'intern',
+            'aktennotiz': 'intern',
+            'aktenvorblatt': 'intern',
+            'inhaltsverzeichnis': 'intern',
+            'sachstandsbericht': 'mandant',
+            'vollmacht': 'mandant',
+            'mandantenbrief': 'mandant',
+            'schuldnerbrief': 'schuldner',
+            'ratenzahlung': 'schuldner',
+            'vergleich': 'schuldner',
+            'forderungskonto': 'intern',
+            'kostenrechnung': 'aussergerichtlich',
+            'zahlungsaufforderung': 'aussergerichtlich',
+            'anschreiben': 'aussergerichtlich',
+        }
+
+        # Bookmarks flach extrahieren
+        flat_bookmarks = []
+
+        def walk_outlines(items):
+            for item in items:
+                if isinstance(item, list):
+                    walk_outlines(item)
+                else:
+                    try:
+                        title = getattr(item, 'title', None) or str(item)
+                        page_idx = pdf_reader.get_destination_page_number(item)
+                        if title and page_idx is not None:
+                            flat_bookmarks.append((title.strip(), page_idx))
+                    except Exception:
+                        continue
+
+        walk_outlines(outlines)
+
+        if not flat_bookmarks:
+            return []
+
+        # Nach Seitennummer sortieren und Duplikate entfernen
+        flat_bookmarks = sorted(set(flat_bookmarks), key=lambda x: x[1])
+
+        documents = []
+        for idx, (title, start_idx) in enumerate(flat_bookmarks):
+            start_page = start_idx + 1  # 1-basiert
+
+            # End-Seite berechnen
+            if idx + 1 < len(flat_bookmarks):
+                end_page = flat_bookmarks[idx + 1][1]  # Seite vor dem nächsten Bookmark
+            else:
+                end_page = num_pages
+
+            # Mindestens eine Seite
+            if end_page < start_page:
+                end_page = start_page
+
+            # Kategorie und Typ ermitteln
+            category = 'aussergerichtlich'
+            doc_type = title
+            title_lower = title.lower()
+
+            for key, cat in doc_type_categories.items():
+                if key in title_lower:
+                    category = cat
+                    doc_type = key.title()
+                    break
+
+            documents.append({
+                'name': title,
+                'type': doc_type,
+                'category': category,
+                'start_page': start_page,
+                'end_page': end_page,
+            })
+
+        return documents
+
+    except Exception:
+        return []
+
+
 def parse_ra_micro_pdf(pdf_file):
     """
     Parst eine RA-Micro Gesamt-PDF und extrahiert:
-    - Aktenzeichen aus dem Inhaltsverzeichnis
-    - Einzelne Dokumente mit Seitenbereichen
+    - Aktenzeichen aus dem Text
+    - Einzelne Dokumente basierend auf PDF-Lesezeichen (Bookmarks)
     - Forderungskonto mit Buchungen
+
+    Die Dokumenttrennung erfolgt primär über PDF-Lesezeichen (Bookmarks),
+    nicht über das Inhaltsverzeichnis im Text.
     """
     try:
         from PyPDF2 import PdfReader
@@ -1948,168 +2063,39 @@ def parse_ra_micro_pdf(pdf_file):
         # Entferne "Herrn" oder "Frau" am Anfang
         debtor = re.sub(r'^(Herrn?|Frau)\s+', '', debtor)
 
-        # Inhaltsverzeichnis parsen - Dokumente identifizieren mit Kategorien
+        # ============================================================
+        # DOKUMENTERKENNUNG AUS PDF-LESEZEICHEN (BOOKMARKS)
+        # ============================================================
+        # Primär: PDF-Lesezeichen verwenden (zuverlässiger als Text-Parsing)
+        # Fallback: Gesamte PDF als ein Dokument
+
         documents = []
-
-        # Erweiterte Dokumenttypen mit Kategorien
-        doc_type_categories = {
-            'rechnung': 'aussergerichtlich',
-            'mahnung': 'aussergerichtlich',
-            'forderungsaufstellung': 'aussergerichtlich',
-            'vertrag': 'aussergerichtlich',
-            'lieferschein': 'aussergerichtlich',
-            'mahnbescheid': 'gerichtlich',
-            'vollstreckungsbescheid': 'gerichtlich',
-            'pfüb': 'gerichtlich',
-            'klage': 'gerichtlich',
-            'urteil': 'gerichtlich',
-            'beschluss': 'gerichtlich',
-            'zustellung': 'gerichtlich',
-            'schreiben': 'aussergerichtlich',
-            'brief': 'aussergerichtlich',
-            'notiz': 'intern',
-            'vermerk': 'intern',
-            'aktennotiz': 'intern',
-            'aktenvorblatt': 'intern',
-            'inhaltsverzeichnis': 'intern',
-            'sachstandsbericht': 'mandant',
-            'vollmacht': 'mandant',
-            'mandantenbrief': 'mandant',
-            'schuldnerbrief': 'schuldner',
-            'ratenzahlung': 'schuldner',
-            'vergleich': 'schuldner',
-            'forderungskonto': 'intern',
-            'kostenrechnung': 'aussergerichtlich',
-            'zahlungsaufforderung': 'aussergerichtlich',
-            'anschreiben': 'aussergerichtlich',
-        }
-
-        # ============================================================
-        # VERBESSERTE INHALTSVERZEICHNIS-ERKENNUNG
-        # ============================================================
-
-        # Muster für typische RA-Micro Inhaltsverzeichnis-Formate:
-        # "Seite 1 - 3: Aktenvorblatt"
-        # "Seite 4: Rechnung Nr. 123"
-        # "1. Rechnung vom 01.01.2024......Seite 5"
-        # "Rechnung                    Seite 5"
-        # "- Mahnung vom 15.01.2024    S. 8-10"
-
-        toc_patterns = [
-            # Format: "Seite X - Y: Dokumentname" oder "Seite X: Dokumentname"
-            r'Seite\s*(\d+)\s*(?:[-–bis]\s*(\d+))?\s*[:\s]+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9]+)',
-
-            # Format: "Dokumentname......Seite X" oder "Dokumentname    Seite X-Y"
-            r'([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-]+?)[\.\s]{2,}(?:Seite|S\.?)\s*(\d+)\s*(?:[-–bis]\s*(\d+))?',
-
-            # Format: "X. Dokumentname" mit optionaler Seitenzahl
-            r'(\d+)\.\s+([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.]+?)(?:\s+(?:Seite|S\.?)\s*(\d+))?(?:\n|$)',
-
-            # Format: "- Dokumentname (Seite X)"
-            r'[-•]\s*([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-\.0-9]+?)(?:\s*\(?\s*(?:Seite|S\.?)\s*(\d+)\s*(?:[-–bis]\s*(\d+))?\s*\)?)?(?:\n|$)',
-
-            # Format: Einzelne bekannte Dokumenttypen mit Seitenzahlen
-            r'(Rechnung|Mahnung|Mahnbescheid|Vollstreckungsbescheid|Vertrag|Schreiben|Vollmacht|Klage|PfÜB|Zustellung|Forderungskonto|Aktenvorblatt)(?:[^\n]*?)(?:Seite|S\.?)\s*(\d+)',
-        ]
-
         doc_id_counter = 1
-        found_documents = []  # Liste für alle gefundenen Dokumente
 
-        # Zuerst versuchen wir das Inhaltsverzeichnis auf den ersten Seiten zu finden
-        toc_text = "\n".join([page_texts.get(i, "") for i in range(min(3, num_pages))])
+        # Versuche Dokumente aus PDF-Lesezeichen zu extrahieren
+        bookmark_docs = extract_documents_from_bookmarks(pdf_reader, num_pages)
 
-        for pattern in toc_patterns:
-            for match in re.finditer(pattern, toc_text + "\n" + full_text[:5000], re.IGNORECASE):
-                groups = match.groups()
-                doc_name = None
-                start_page = 1
-                end_page = None
+        if bookmark_docs:
+            # Lesezeichen gefunden - diese verwenden
+            for doc in bookmark_docs:
+                page_count = doc['end_page'] - doc['start_page'] + 1
+                documents.append({
+                    'id': f'imp-doc-{doc_id_counter:03d}',
+                    'name': f"{doc['name'][:40]}.pdf",
+                    'type': doc['type'],
+                    'category': doc['category'],
+                    'page': doc['start_page'],
+                    'end_page': doc['end_page'],
+                    'page_count': page_count,
+                    'date': date.today() - timedelta(days=doc_id_counter * 5),
+                    'size': f'{max(50, page_count * 30)} KB'
+                })
+                doc_id_counter += 1
 
-                # Pattern-spezifische Extraktion
-                for i, g in enumerate(groups):
-                    if g:
-                        g_stripped = g.strip()
-                        # Prüfen ob es eine Seitenzahl ist
-                        if g_stripped.isdigit():
-                            page_val = int(g_stripped)
-                            if page_val <= num_pages:
-                                if start_page == 1 or page_val < start_page:
-                                    start_page = page_val
-                                elif page_val > start_page:
-                                    end_page = page_val
-                        else:
-                            # Dokumentname extrahieren
-                            potential_name = g_stripped
-                            # Bereinigen
-                            potential_name = re.sub(r'^[\d\.\-\s]+', '', potential_name)
-                            potential_name = re.sub(r'[\.\s]+$', '', potential_name)
-                            if len(potential_name) >= 3 and not potential_name.isdigit():
-                                doc_name = potential_name
-
-                if doc_name and start_page > 0:
-                    # Prüfen ob ähnliches Dokument bereits existiert
-                    is_duplicate = False
-                    for existing in found_documents:
-                        if existing['start_page'] == start_page and doc_name.lower()[:10] == existing['name'].lower()[:10]:
-                            is_duplicate = True
-                            break
-
-                    if not is_duplicate:
-                        # Kategorie ermitteln
-                        category = 'aussergerichtlich'
-                        doc_type = doc_name
-                        for key, cat in doc_type_categories.items():
-                            if key in doc_name.lower():
-                                category = cat
-                                doc_type = key.title()
-                                break
-
-                        found_documents.append({
-                            'name': doc_name,
-                            'type': doc_type,
-                            'category': category,
-                            'start_page': min(start_page, num_pages),
-                            'end_page': min(end_page, num_pages) if end_page else None,
-                        })
-
-        # Dokumente nach Startseite sortieren
-        found_documents.sort(key=lambda x: x['start_page'])
-
-        # End-Seiten berechnen falls nicht angegeben
-        for i, doc in enumerate(found_documents):
-            if doc['end_page'] is None:
-                if i + 1 < len(found_documents):
-                    # Nächstes Dokument beginnt auf nächster Seite
-                    doc['end_page'] = found_documents[i + 1]['start_page'] - 1
-                else:
-                    # Letztes Dokument geht bis zum Ende
-                    doc['end_page'] = num_pages
-            # Mindestens eine Seite
-            if doc['end_page'] < doc['start_page']:
-                doc['end_page'] = doc['start_page']
-
-        # Finale Dokument-Liste erstellen
-        for doc in found_documents:
-            page_count = doc['end_page'] - doc['start_page'] + 1
-            documents.append({
-                'id': f'imp-doc-{doc_id_counter:03d}',
-                'name': f"{doc['name'][:40]}.pdf",
-                'type': doc['type'],
-                'category': doc['category'],
-                'page': doc['start_page'],
-                'end_page': doc['end_page'],
-                'page_count': page_count,
-                'date': date.today() - timedelta(days=doc_id_counter * 5),
-                'size': f'{max(50, page_count * 30)} KB'
-            })
-            doc_id_counter += 1
-
-        # Fallback: Wenn keine Dokumente gefunden, Standarddokumente mit Kategorien erstellen
+        # Fallback: Wenn keine Lesezeichen gefunden, gesamte PDF als ein Dokument
         if not documents:
             documents = [
-                {'id': 'imp-doc-001', 'name': 'Forderungsaufstellung.pdf', 'type': 'Forderungsaufstellung', 'category': 'aussergerichtlich', 'page': 1, 'date': date.today(), 'size': '150 KB'},
-                {'id': 'imp-doc-002', 'name': 'Originalrechnung.pdf', 'type': 'Rechnung', 'category': 'aussergerichtlich', 'page': 2, 'date': date.today() - timedelta(30), 'size': '80 KB'},
-                {'id': 'imp-doc-003', 'name': 'Gesamtakte_Import.pdf', 'type': 'Akte', 'category': 'intern', 'page': 1, 'date': date.today(), 'size': f'{num_pages * 50} KB'},
+                {'id': 'imp-doc-001', 'name': 'Gesamtakte_Import.pdf', 'type': 'Akte', 'category': 'intern', 'page': 1, 'end_page': num_pages, 'page_count': num_pages, 'date': date.today(), 'size': f'{num_pages * 50} KB'},
             ]
 
         # Forderungskonto extrahieren
@@ -2400,13 +2386,13 @@ def show_ra_micro_import():
                 with st.expander("⚙️ Trennungseinstellungen"):
                     split_mode = st.selectbox(
                         "Trennungsmodus",
-                        options=["auto", "heuristic", "bookmarks"],
+                        options=["bookmarks", "auto", "heuristic"],
                         format_func=lambda x: {
+                            "bookmarks": "📑 Lesezeichen (Bookmarks) - Empfohlen",
                             "auto": "🔄 Automatisch (Bookmarks → Heuristik)",
-                            "heuristic": "🧠 Nur Heuristik (Textmuster + OCR)",
-                            "bookmarks": "📑 Nur Bookmarks"
+                            "heuristic": "🧠 Nur Heuristik (Textmuster + OCR)"
                         }.get(x, x),
-                        help="Wählen Sie die Methode zur Dokumenttrennung"
+                        help="Wählen Sie die Methode zur Dokumenttrennung. Lesezeichen ist die bevorzugte Methode."
                     )
 
                     use_ocr = st.checkbox(
