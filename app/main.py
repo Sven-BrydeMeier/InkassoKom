@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.12-1015"
+APP_VERSION = "v2026.01.12-1025"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -4185,23 +4185,26 @@ def show_cases_list():
         s, h, o = get_balance(case['id'])
         is_imported = case.get('imported', False)
 
-        col1, col2, col3, col4, col5 = st.columns([1.5, 2.5, 2, 2, 1])
+        col1, col2, col3, col4, col5, col6 = st.columns([1.5, 2, 2, 2, 2, 1])
         with col1:
             import_badge = "📥 " if is_imported else ""
             st.write(f"**{import_badge}{case['nr']}**")
             if is_imported:
                 st.caption(f"Quelle: {case.get('source_pdf', 'Import')[:20]}...")
         with col2:
-            st.write(case['debtor'])
-            st.caption(case['creditor'])
+            st.write(f"**Gläubiger:**")
+            st.write(case['creditor'])
         with col3:
+            st.write(f"**Schuldner:**")
+            st.write(case['debtor'])
+        with col4:
             status_icons = {'offen': '🟡', 'mahnverfahren': '🟠', 'vollstreckung': '🔴', 'abgeschlossen': '🟢'}
             st.write(f"{status_icons.get(case['status'], '⚪')} {case['status'].title()}")
-        with col4:
+        with col5:
             st.write(fmt_curr(o))
             if h > 0:
                 st.caption(f"Gezahlt: {fmt_curr(h)}")
-        with col5:
+        with col6:
             if st.button("📂", key=f"l_{case['id']}"):
                 st.session_state.selected_case = case['id']
                 st.session_state.page = 'case_detail'
