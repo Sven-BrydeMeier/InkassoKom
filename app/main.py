@@ -4,7 +4,7 @@ Vollständige Implementierung aller Funktionen
 """
 
 # App-Versionsnummer (Datum-Zeit Format)
-APP_VERSION = "v2026.01.12-1025"
+APP_VERSION = "v2026.01.14-1045"
 
 import streamlit as st
 from datetime import datetime, date, timedelta
@@ -24,11 +24,59 @@ try:
         db_get_all_cases,
         db_get_case,
         db_get_documents,
-        db_get_bookings
+        db_get_bookings,
+        db_create_case,
+        db_create_documents,
+        db_create_bookings,
+        db_delete_case,
+        db_clear_all_data,
+        get_store
     )
     DB_AVAILABLE = True
 except ImportError:
     DB_AVAILABLE = False
+
+
+def save_case_to_db(case_data: dict, documents: list = None, bookings: list = None) -> str:
+    """
+    Speichert eine Akte mit Dokumenten und Buchungen in der Datenbank.
+    Fallback auf Session State wenn DB nicht verfügbar.
+
+    Returns:
+        case_id: Die ID der erstellten Akte
+    """
+    if DB_AVAILABLE and is_database_configured():
+        # Datenbank verwenden
+        case_id = db_create_case(case_data)
+        if case_id:
+            if documents:
+                db_create_documents(case_id, documents)
+            if bookings:
+                db_create_bookings(case_id, bookings)
+            return case_id
+
+    # Fallback: Session State + DEMO_CASES
+    case_id = case_data.get('id', f"local-{len(st.session_state.get('imported_cases', [])) + 1:03d}")
+    case_data['id'] = case_id
+
+    if 'imported_cases' not in st.session_state:
+        st.session_state.imported_cases = []
+    st.session_state.imported_cases.append(case_data)
+    DEMO_CASES.append(case_data)
+
+    if documents:
+        if 'imported_documents' not in st.session_state:
+            st.session_state.imported_documents = {}
+        st.session_state.imported_documents[case_id] = documents
+        DEMO_DOCUMENTS[case_id] = documents
+
+    if bookings:
+        if 'imported_bookings' not in st.session_state:
+            st.session_state.imported_bookings = {}
+        st.session_state.imported_bookings[case_id] = bookings
+        DEMO_BOOKINGS[case_id] = bookings
+
+    return case_id
 
 # PDF Splitter Integration (intelligente Dokumententrennung)
 try:
@@ -2459,11 +2507,24 @@ def show_ra_micro_import():
                     # Import mit intelligenter Trennung
                     if st.button("✅ Mit intelligenter Trennung importieren", type="primary", key="import_intelligent"):
                         try:
-                            # Neue Akte erstellen
-                            new_case_id = f"imp-{len(st.session_state.imported_cases) + 1:03d}"
+                            # Dokumente aus intelligenter Trennung erstellen
+                            splitter = PDFSplitter(use_ocr=use_ocr)
+                            documents_to_import = []
+                            doc_pdfs = {}
+                            temp_case_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
+                            for idx, seg in enumerate(segments, start=1):
+                                doc_id = f"{temp_case_id}-doc-{idx:03d}"
+                                doc_dict = seg.to_document_dict(doc_id)
+                                documents_to_import.append(doc_dict)
+
+                                # PDF extrahieren
+                                doc_pdf = splitter.extract_segment(pdf_bytes, seg)
+                                doc_pdfs[doc_id] = doc_pdf
+
+                            # Neue Akte mit save_case_to_db speichern (DB oder Fallback)
                             new_case = {
-                                'id': new_case_id,
+                                'id': temp_case_id,
                                 'nr': result['aktenzeichen'],
                                 'creditor': result['creditor'],
                                 'debtor': result['debtor'],
@@ -2481,45 +2542,25 @@ def show_ra_micro_import():
                                 'source_pdf': uploaded_pdf.name,
                                 'contract_type': 'Importiert',
                                 'contract_date': date.today() - timedelta(days=90),
-                                'invoice_nr': f'IMP-{new_case_id}',
+                                'invoice_nr': f'IMP-{temp_case_id}',
                                 'invoice_date': date.today() - timedelta(days=60),
                                 'leistung': 'Aus RA-Micro Import',
                                 'mahnung_dates': [],
                             }
 
-                            st.session_state.imported_cases.append(new_case)
-                            DEMO_CASES.append(new_case)
+                            # In Datenbank speichern
+                            new_case_id = save_case_to_db(new_case, documents_to_import, result['bookings'])
 
-                            # Dokumente aus intelligenter Trennung erstellen
-                            splitter = PDFSplitter(use_ocr=use_ocr)
-                            documents_to_import = []
-                            doc_pdfs = {}
-
-                            for idx, seg in enumerate(segments, start=1):
-                                doc_id = f"{new_case_id}-doc-{idx:03d}"
-                                doc_dict = seg.to_document_dict(doc_id)
-                                documents_to_import.append(doc_dict)
-
-                                # PDF extrahieren
-                                doc_pdf = splitter.extract_segment(pdf_bytes, seg)
-                                doc_pdfs[doc_id] = doc_pdf
+                            # PDFs in Session State für Anzeige speichern
+                            for doc_id, doc_pdf in doc_pdfs.items():
                                 st.session_state.document_pdfs[doc_id] = doc_pdf
-
-                            st.session_state.imported_documents[new_case_id] = documents_to_import
-                            DEMO_DOCUMENTS[new_case_id] = documents_to_import
-
-                            # Gesamt-PDF speichern
                             st.session_state.case_full_pdfs[new_case_id] = pdf_bytes
-
-                            # Buchungen
-                            st.session_state.imported_bookings[new_case_id] = result['bookings']
-                            DEMO_BOOKINGS[new_case_id] = result['bookings']
 
                             # Session State bereinigen
                             st.session_state.intelligent_split_done = False
                             st.session_state.intelligent_segments = []
 
-                            st.success(f"✅ Akte {result['aktenzeichen']} mit {len(doc_pdfs)} intelligent getrennten Dokumenten importiert!")
+                            st.success(f"✅ Akte {result['aktenzeichen']} mit {len(doc_pdfs)} intelligent getrennten Dokumenten in Datenbank gespeichert!")
                             st.balloons()
 
                             st.session_state.page = 'cases'
@@ -2731,51 +2772,20 @@ def show_ra_micro_import():
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 if st.button("✅ Akte importieren", type="primary", use_container_width=True):
-                    # Neue Akte erstellen
-                    new_case_id = f"imp-{len(st.session_state.imported_cases) + 1:03d}"
-
-                    new_case = {
-                        'id': new_case_id,
-                        'nr': result['aktenzeichen'],
-                        'creditor': result['creditor'],
-                        'debtor': result['debtor'],
-                        'creditor_address': result.get('creditor_address', ''),
-                        'debtor_address': result.get('debtor_address', ''),
-                        'subject': f'Import aus RA-Micro - {uploaded_pdf.name}',
-                        'status': result['status'],
-                        'dunning': result['dunning'],
-                        'enforcement': result['enforcement'],
-                        'principal': result['principal'],
-                        'interest': 5.0,
-                        'due_date': date.today() - timedelta(days=60),
-                        'created': datetime.now(),
-                        'imported': True,
-                        'source_pdf': uploaded_pdf.name,
-                        # Zusätzliche Felder für Kompatibilität
-                        'contract_type': 'Importiert',
-                        'contract_date': date.today() - timedelta(days=90),
-                        'invoice_nr': f'IMP-{new_case_id}',
-                        'invoice_date': date.today() - timedelta(days=60),
-                        'leistung': 'Aus RA-Micro Import',
-                        'mahnung_dates': [],
-                    }
-
-                    # Zur Liste hinzufügen
-                    st.session_state.imported_cases.append(new_case)
-                    DEMO_CASES.append(new_case)
+                    temp_case_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    documents_to_import = []
+                    doc_pdfs = {}
 
                     # Dokumente bestimmen: manuell oder automatisch
                     if use_manual_split and st.session_state.manual_splits:
                         # Manuelle Dokumenttrennung verwenden
                         all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
-                        documents_to_import = []
-                        doc_pdfs = {}
 
                         for i in range(len(all_splits) - 1):
                             start_page = all_splits[i]
                             end_page = all_splits[i + 1] - 1
                             doc_key = f"manual_doc_{i}"
-                            doc_id = f"{new_case_id}-doc-{i+1}"
+                            doc_id = f"{temp_case_id}-doc-{i+1}"
                             doc_name = st.session_state.manual_doc_names.get(doc_key, f"Dokument {i+1}")
 
                             doc = {
@@ -2794,10 +2804,6 @@ def show_ra_micro_import():
                             doc_pdf = extract_pdf_pages(pdf_bytes, start_page, end_page)
                             if doc_pdf:
                                 doc_pdfs[doc_id] = doc_pdf
-                                st.session_state.document_pdfs[doc_id] = doc_pdf
-
-                        st.session_state.imported_documents[new_case_id] = documents_to_import
-                        DEMO_DOCUMENTS[new_case_id] = documents_to_import
 
                         # Session State für manuelle Trennung zurücksetzen
                         st.session_state.manual_splits = []
@@ -2806,32 +2812,55 @@ def show_ra_micro_import():
                         # Automatische Dokumenttrennung verwenden
                         for doc in result['documents']:
                             doc['size'] = f"{len(pdf_bytes) // max(1, len(result['documents'])) // 1024} KB"
-                        st.session_state.imported_documents[new_case_id] = result['documents']
-                        DEMO_DOCUMENTS[new_case_id] = result['documents']
+                        documents_to_import = result['documents']
 
                         # PDF in einzelne Dokumente aufteilen
                         doc_pdfs = split_pdf_by_toc(pdf_bytes, result['documents'])
-                        for doc_id, doc_pdf in doc_pdfs.items():
-                            st.session_state.document_pdfs[doc_id] = doc_pdf
 
                         # Falls Dokumente keine eigenen PDFs haben, Gesamt-PDF zuweisen
                         for doc in result['documents']:
-                            if doc['id'] not in st.session_state.document_pdfs:
-                                # Einzelne Seite extrahieren
+                            if doc['id'] not in doc_pdfs:
                                 page_num = doc.get('page', 1) - 1
                                 single_page = extract_pdf_pages(pdf_bytes, page_num)
                                 if single_page:
-                                    st.session_state.document_pdfs[doc['id']] = single_page
+                                    doc_pdfs[doc['id']] = single_page
 
-                    # Gesamt-PDF für die Akte speichern
+                    # Neue Akte erstellen
+                    new_case = {
+                        'id': temp_case_id,
+                        'nr': result['aktenzeichen'],
+                        'creditor': result['creditor'],
+                        'debtor': result['debtor'],
+                        'creditor_address': result.get('creditor_address', ''),
+                        'debtor_address': result.get('debtor_address', ''),
+                        'subject': f'Import aus RA-Micro - {uploaded_pdf.name}',
+                        'status': result['status'],
+                        'dunning': result['dunning'],
+                        'enforcement': result['enforcement'],
+                        'principal': result['principal'],
+                        'interest': 5.0,
+                        'due_date': date.today() - timedelta(days=60),
+                        'created': datetime.now(),
+                        'imported': True,
+                        'source_pdf': uploaded_pdf.name,
+                        'contract_type': 'Importiert',
+                        'contract_date': date.today() - timedelta(days=90),
+                        'invoice_nr': f'IMP-{temp_case_id}',
+                        'invoice_date': date.today() - timedelta(days=60),
+                        'leistung': 'Aus RA-Micro Import',
+                        'mahnung_dates': [],
+                    }
+
+                    # In Datenbank speichern
+                    new_case_id = save_case_to_db(new_case, documents_to_import, result['bookings'])
+
+                    # PDFs in Session State für Anzeige speichern
+                    for doc_id, doc_pdf in doc_pdfs.items():
+                        st.session_state.document_pdfs[doc_id] = doc_pdf
                     st.session_state.case_full_pdfs[new_case_id] = pdf_bytes
 
-                    # Buchungen hinzufügen
-                    st.session_state.imported_bookings[new_case_id] = result['bookings']
-                    DEMO_BOOKINGS[new_case_id] = result['bookings']
-
-                    num_docs = len(doc_pdfs) if doc_pdfs else len(result['documents'])
-                    st.success(f"✅ Akte {result['aktenzeichen']} mit {num_docs} Dokumenten erfolgreich importiert!")
+                    num_docs = len(doc_pdfs) if doc_pdfs else len(documents_to_import)
+                    st.success(f"✅ Akte {result['aktenzeichen']} mit {num_docs} Dokumenten in Datenbank gespeichert!")
                     st.balloons()
 
                     # Zur Aktenübersicht wechseln
@@ -3127,11 +3156,11 @@ def show_zip_import():
                         if case_target == "➕ Neue Akte anlegen" and target_case.get('id') is None:
                             try:
                                 # Neue Case-ID generieren
-                                actual_case_id = f'zip-case-{datetime.now().strftime("%Y%m%d%H%M%S")}'
+                                temp_case_id = f'zip-case-{datetime.now().strftime("%Y%m%d%H%M%S")}'
 
                                 # Neue Akte erstellen
                                 new_case = {
-                                    'id': actual_case_id,
+                                    'id': temp_case_id,
                                     'nr': st.session_state.get('zip_new_case_nr', ''),
                                     'creditor': st.session_state.get('zip_new_creditor', ''),
                                     'creditor_address': st.session_state.get('zip_new_creditor_addr', ''),
@@ -3145,15 +3174,14 @@ def show_zip_import():
                                     'enforcement': 'nicht_begonnen',
                                     'due_date': date.today(),
                                     'created': datetime.now(),
+                                    'imported': True,
                                     'source_zip': zip_file.name
                                 }
 
-                                # Zu imported_cases hinzufügen
-                                if 'imported_cases' not in st.session_state:
-                                    st.session_state.imported_cases = []
-                                st.session_state.imported_cases.append(new_case)
+                                # In Datenbank speichern (ohne Dokumente - die kommen später)
+                                actual_case_id = save_case_to_db(new_case, None, None)
 
-                                st.info(f"📁 Akte **{new_case['nr']}** wird angelegt...")
+                                st.info(f"📁 Akte **{new_case['nr']}** wird in Datenbank angelegt...")
 
                             except Exception as e:
                                 st.error(f"❌ Fehler beim Anlegen der Akte: {str(e)}")
@@ -5063,7 +5091,7 @@ def show_settings():
     """Einstellungen für API-Keys und Benachrichtigungen"""
     st.markdown("## ⚙️ Einstellungen")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🤖 KI-Integration", "🔔 Benachrichtigungen", "👤 Profil", "🔧 Debug"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🤖 KI-Integration", "🔔 Benachrichtigungen", "👤 Profil", "🗄️ Datenverwaltung", "🔧 Debug"])
 
     with tab1:
         st.markdown("### OpenAI API-Schlüssel")
@@ -5147,6 +5175,100 @@ def show_settings():
         st.text_area("Adresse", value="Musterstraße 123\n10115 Berlin")
 
     with tab4:
+        st.markdown("### 🗄️ Datenverwaltung")
+        st.caption("Verwalten Sie hier Ihre importierten Akten und Datenbank-Einstellungen.")
+
+        # ============= IMPORTIERTE AKTEN =============
+        st.markdown("#### 📁 Importierte Akten")
+
+        all_cases = get_all_cases()
+        imported_cases = [c for c in all_cases if c.get('imported', False)]
+
+        if imported_cases:
+            st.info(f"📊 **{len(imported_cases)} importierte Akte(n)** in der Datenbank")
+
+            # Akten-Liste mit Löschoptionen
+            for case in imported_cases:
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.write(f"**{case['nr']}** - {case['debtor']}")
+                with col2:
+                    st.caption(f"Gläubiger: {case['creditor']}")
+                with col3:
+                    if st.button("🗑️", key=f"del_case_{case['id']}", help="Akte löschen"):
+                        if DB_AVAILABLE:
+                            if db_delete_case(case['id']):
+                                st.success(f"✅ Akte {case['nr']} gelöscht")
+                                st.rerun()
+                            else:
+                                st.error("Fehler beim Löschen")
+                        else:
+                            # Session State Fallback
+                            st.session_state.imported_cases = [
+                                c for c in st.session_state.get('imported_cases', [])
+                                if c.get('id') != case['id']
+                            ]
+                            st.success(f"✅ Akte {case['nr']} aus Session gelöscht")
+                            st.rerun()
+
+            st.divider()
+
+            # Alle importierten Akten löschen
+            st.markdown("#### ⚠️ Alle importierten Akten löschen")
+            st.warning("Diese Aktion löscht alle importierten Akten unwiderruflich!")
+
+            confirm_delete_all = st.checkbox("Ich bestätige, dass ich alle importierten Akten löschen möchte", key="confirm_delete_imported")
+
+            if st.button("🗑️ Alle importierten Akten löschen", disabled=not confirm_delete_all, type="secondary"):
+                deleted_count = 0
+                for case in imported_cases:
+                    if DB_AVAILABLE:
+                        db_delete_case(case['id'])
+                    deleted_count += 1
+
+                # Session State bereinigen
+                st.session_state.imported_cases = []
+                st.session_state.imported_documents = {}
+                st.session_state.imported_bookings = {}
+
+                st.success(f"✅ {deleted_count} Akte(n) gelöscht")
+                st.rerun()
+
+        else:
+            st.info("📭 Keine importierten Akten vorhanden")
+
+        st.divider()
+
+        # ============= DATENBANK KOMPLETT LEEREN =============
+        st.markdown("#### 🚨 Datenbank komplett leeren")
+        st.error("**ACHTUNG:** Diese Aktion löscht ALLE Daten (Akten, Dokumente, Buchungen) unwiderruflich!")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            confirm_text = st.text_input(
+                "Geben Sie 'LÖSCHEN' ein zur Bestätigung",
+                key="confirm_clear_db"
+            )
+        with col2:
+            confirm_checkbox = st.checkbox("Ich verstehe, dass alle Daten gelöscht werden", key="confirm_clear_checkbox")
+
+        if st.button("🚨 DATENBANK LEEREN", disabled=(confirm_text != "LÖSCHEN" or not confirm_checkbox), type="secondary"):
+            if DB_AVAILABLE:
+                if db_clear_all_data():
+                    st.success("✅ Datenbank wurde geleert")
+                else:
+                    st.error("Fehler beim Leeren der Datenbank")
+            else:
+                # Session State komplett leeren
+                st.session_state.imported_cases = []
+                st.session_state.imported_documents = {}
+                st.session_state.imported_bookings = {}
+                st.session_state.document_pdfs = {}
+                st.session_state.case_full_pdfs = {}
+                st.success("✅ Session-Daten wurden geleert")
+            st.rerun()
+
+    with tab5:
         st.markdown("### 🔧 Debug & System-Status")
         st.caption("Diese Seite zeigt den Status aller Systemkomponenten und hilft bei der Fehlersuche.")
 

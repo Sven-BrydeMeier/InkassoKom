@@ -214,6 +214,45 @@ class DatabaseBackedStore:
         # Fallback
         return self._get_session_bookings(case_id)
 
+    def create_bookings(self, case_id: str, bookings: List[Dict[str, Any]]) -> bool:
+        """Create bookings for a case."""
+        if self.use_database:
+            try:
+                from src.services.case_service import CaseService
+                CaseService.bulk_create_bookings(case_id, bookings)
+                return True
+            except Exception as e:
+                st.warning(f"DB-Fehler bei Buchungen: {e}")
+
+        # Fallback to session state
+        return self._create_session_bookings(case_id, bookings)
+
+    def delete_case(self, case_id: str) -> bool:
+        """Delete a case and all related data."""
+        if self.use_database:
+            try:
+                from src.services.case_service import CaseService
+                CaseService.delete_case(case_id)
+                return True
+            except Exception as e:
+                st.warning(f"DB-Fehler beim Löschen: {e}")
+
+        # Fallback: Delete from session state
+        return self._delete_session_case(case_id)
+
+    def clear_all_data(self) -> bool:
+        """Clear all data from database/session."""
+        if self.use_database:
+            try:
+                from src.services.case_service import CaseService
+                CaseService.clear_all_cases()
+                return True
+            except Exception as e:
+                st.warning(f"DB-Fehler beim Leeren: {e}")
+
+        # Fallback: Clear session state
+        return self._clear_session_data()
+
     # Session state fallback methods
 
     def _get_session_cases(self) -> List[Dict[str, Any]]:
@@ -262,6 +301,57 @@ class DatabaseBackedStore:
             return st.session_state.imported_bookings.get(case_id, [])
         return []
 
+    def _create_session_bookings(self, case_id: str, bookings: List[Dict[str, Any]]) -> bool:
+        """Create bookings in session state."""
+        if 'imported_bookings' not in st.session_state:
+            st.session_state.imported_bookings = {}
+
+        st.session_state.imported_bookings[case_id] = bookings
+        return True
+
+    def _delete_session_case(self, case_id: str) -> bool:
+        """Delete a case from session state."""
+        try:
+            # Remove from imported_cases
+            if 'imported_cases' in st.session_state:
+                st.session_state.imported_cases = [
+                    c for c in st.session_state.imported_cases
+                    if c.get('id') != case_id
+                ]
+
+            # Remove documents
+            if 'imported_documents' in st.session_state:
+                st.session_state.imported_documents.pop(case_id, None)
+
+            # Remove bookings
+            if 'imported_bookings' in st.session_state:
+                st.session_state.imported_bookings.pop(case_id, None)
+
+            # Remove PDFs
+            if 'document_pdfs' in st.session_state:
+                keys_to_remove = [k for k in st.session_state.document_pdfs if k.startswith(case_id)]
+                for k in keys_to_remove:
+                    del st.session_state.document_pdfs[k]
+
+            if 'case_full_pdfs' in st.session_state:
+                st.session_state.case_full_pdfs.pop(case_id, None)
+
+            return True
+        except Exception:
+            return False
+
+    def _clear_session_data(self) -> bool:
+        """Clear all data from session state."""
+        try:
+            st.session_state.imported_cases = []
+            st.session_state.imported_documents = {}
+            st.session_state.imported_bookings = {}
+            st.session_state.document_pdfs = {}
+            st.session_state.case_full_pdfs = {}
+            return True
+        except Exception:
+            return False
+
 
 # Global store instance
 _store: Optional[DatabaseBackedStore] = None
@@ -304,3 +394,18 @@ def db_create_documents(case_id: str, documents: List[Dict[str, Any]]) -> bool:
 def db_get_bookings(case_id: str) -> List[Dict[str, Any]]:
     """Get bookings for case."""
     return get_store().get_bookings(case_id)
+
+
+def db_create_bookings(case_id: str, bookings: List[Dict[str, Any]]) -> bool:
+    """Create bookings for case."""
+    return get_store().create_bookings(case_id, bookings)
+
+
+def db_delete_case(case_id: str) -> bool:
+    """Delete a case and all related data."""
+    return get_store().delete_case(case_id)
+
+
+def db_clear_all_data() -> bool:
+    """Clear all data from database."""
+    return get_store().clear_all_data()
