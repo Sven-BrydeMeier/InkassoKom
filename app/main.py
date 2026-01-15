@@ -2665,12 +2665,15 @@ def show_ra_micro_import():
             st.divider()
 
             # =====================================================================
-            # MANUELLE DOKUMENTENTRENNUNG
+            # MANUELLE DOKUMENTENTRENNUNG (Optional)
             # =====================================================================
-            st.markdown("#### ✂️ Manuelle Dokumententrennung")
-            st.info("Falls die automatische Erkennung nicht alle Dokumente korrekt getrennt hat, können Sie hier manuell Trennstellen setzen.")
+            use_manual_split = st.checkbox(
+                "✂️ Manuelle Dokumententrennung verwenden",
+                value=False,
+                help="Aktivieren Sie diese Option nur, wenn die automatische Erkennung (Lesezeichen) nicht korrekt funktioniert hat."
+            )
 
-            # Session State für manuelle Trennungen initialisieren
+            # Session State für manuelle Trennungen initialisieren (immer)
             if 'manual_splits' not in st.session_state:
                 st.session_state.manual_splits = []
             if 'manual_doc_names' not in st.session_state:
@@ -2678,8 +2681,13 @@ def show_ra_micro_import():
 
             num_pages = result['num_pages']
 
-            # Layout: PDF-Vorschau links, Trennungssteuerung rechts
-            preview_col, control_col = st.columns([1, 1])
+            # Manuelle Trennung nur anzeigen wenn aktiviert
+            if use_manual_split:
+                st.markdown("#### ✂️ Manuelle Dokumententrennung")
+                st.info("Falls die automatische Erkennung nicht alle Dokumente korrekt getrennt hat, können Sie hier manuell Trennstellen setzen.")
+
+                # Layout: PDF-Vorschau links, Trennungssteuerung rechts
+                preview_col, control_col = st.columns([1, 1])
 
             with preview_col:
                 st.markdown("##### 👁️ PDF-Vorschau")
@@ -2849,12 +2857,12 @@ def show_ra_micro_import():
                         )
                         st.session_state.manual_doc_names[doc['id']] = new_name
 
-                # Zurücksetzen-Button
-                if st.session_state.manual_splits:
-                    if st.button("🔄 Alle Trennungen zurücksetzen"):
-                        st.session_state.manual_splits = []
-                        st.session_state.manual_doc_names = {}
-                        st.rerun()
+                    # Zurücksetzen-Button
+                    if st.session_state.manual_splits:
+                        if st.button("🔄 Alle Trennungen zurücksetzen"):
+                            st.session_state.manual_splits = []
+                            st.session_state.manual_doc_names = {}
+                            st.rerun()
 
             st.divider()
 
@@ -2867,8 +2875,8 @@ def show_ra_micro_import():
                     doc_pdfs = {}
 
                     # Dokumente bestimmen: manuell oder automatisch
-                    # Manuelle Trennung wird verwendet wenn Trennstellen gesetzt wurden
-                    if st.session_state.get('manual_splits', []):
+                    # Manuelle Trennung nur wenn explizit aktiviert UND Trennstellen gesetzt
+                    if use_manual_split and st.session_state.get('manual_splits', []):
                         # Manuelle Dokumenttrennung verwenden
                         all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
 
