@@ -368,7 +368,17 @@ DEMO_BOOKINGS = {
 }
 
 def fmt_curr(amt): return f"{amt:,.2f} €".replace(",", "X").replace(".", ",").replace("X", ".")
-def fmt_date(d): return d.strftime("%d.%m.%Y") if d else "-"
+
+def fmt_date(d):
+    """Formatiert ein Datum als DD.MM.YYYY - unterstützt date, datetime und Strings."""
+    if not d:
+        return "-"
+    if isinstance(d, str):
+        return d  # Bereits formatiert
+    try:
+        return d.strftime("%d.%m.%Y")
+    except AttributeError:
+        return str(d)
 
 # =============================================================================
 # WORD DOCUMENT HELPER FUNCTIONS
