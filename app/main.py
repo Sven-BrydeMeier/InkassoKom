@@ -2867,7 +2867,8 @@ def show_ra_micro_import():
                     doc_pdfs = {}
 
                     # Dokumente bestimmen: manuell oder automatisch
-                    if use_manual_split and st.session_state.manual_splits:
+                    # Manuelle Trennung wird verwendet wenn Trennstellen gesetzt wurden
+                    if st.session_state.get('manual_splits', []):
                         # Manuelle Dokumenttrennung verwenden
                         all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
 
