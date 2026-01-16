@@ -2027,10 +2027,28 @@ def parse_ra_micro_pdf(pdf_file):
         creditor_address = ""
         debtor_address = ""
 
-        # === METHODE 0: AUFTRAGGEBER/GEGNER Sektionen (RA-Micro Aktenvorblatt) ===
-        # Dies ist die zuverlässigste Methode für RA-Micro Aktenvorblätter
+        # === METHODE 0: Aktenkurzbezeichnung "Mandant ./. Gegner" (PRIMÄR) ===
+        # Format: "RENO ./. Nikusch" oder "Gehlsen ./. Berg"
+        # Dies ist die zuverlässigste Quelle für Parteinamen
+        mandant_kurz = ""
+        gegner_kurz = ""
+        kurzbezeichnung_match = re.search(
+            r'([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\-\s\.]+?)\s*\./\.\s*([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\-\s\.]+?)(?:\s*\n|\s+\d{1,4}/\d{2}|$)',
+            full_text
+        )
+        if kurzbezeichnung_match:
+            mandant_kurz = kurzbezeichnung_match.group(1).strip()
+            gegner_kurz = kurzbezeichnung_match.group(2).strip()
+            # Kurzbezeichnung direkt als Parteien verwenden (wird später ggf. erweitert)
+            if mandant_kurz:
+                creditor = mandant_kurz
+            if gegner_kurz:
+                debtor = gegner_kurz
 
-        # ZUERST: Suche explizit nach AUFTRAGGEBER-Sektion
+        # === METHODE 1: AUFTRAGGEBER/GEGNER Sektionen (RA-Micro Aktenvorblatt) ===
+        # Erweitere Kurzbezeichnung mit vollständigen Namen aus Sektionen
+
+        # AUFTRAGGEBER-Sektion für Gläubiger
         auftraggeber_section = re.search(
             r'AUFTRAGGEBER[:\s]*\n(.*?)(?=GEGNER|RECHTSSCHUTZ|Aktenkennz|wegen\s|$)',
             full_text,
@@ -2041,22 +2059,78 @@ def parse_ra_micro_pdf(pdf_file):
             section_text = auftraggeber_section.group(1)
             # Suche Firma mit Rechtsform in der AUFTRAGGEBER-Sektion
             firma_in_section = re.search(
-                r'(.{3,60}?(?:GmbH|mbH|AG|KG|OHG|UG|e\.K\.|Co\.\s*KG|& Co\.|Inc\.|Ltd\.|oHG|SE))',
+                r'([A-Za-zäöüÄÖÜßé][\w\s\-\.&,für]+?(?:GmbH|mbH|AG|KG|OHG|UG|e\.K\.|Co\.\s*KG|& Co\.|Inc\.|Ltd\.|oHG|SE))',
                 section_text, re.IGNORECASE
             )
             if firma_in_section:
-                creditor = firma_in_section.group(1).strip()
+                found_creditor = firma_in_section.group(1).strip()
                 # Bereinigen
-                creditor = re.sub(r'^\s*\n*', '', creditor)
-                creditor = re.sub(r'\s*\d{4,}.*$', '', creditor).strip()
-                creditor = re.sub(r'\s+', ' ', creditor).strip()
+                found_creditor = re.sub(r'^\s*\n*', '', found_creditor)
+                found_creditor = re.sub(r'\s*\d{4,}.*$', '', found_creditor).strip()
+                found_creditor = re.sub(r'\s+', ' ', found_creditor).strip()
+                if found_creditor:
+                    creditor = found_creditor
+
+        # GEGNER-Sektion für Schuldner
+        gegner_section = re.search(
+            r'GEGNER[:\s]*\n?(.*?)(?=GEGNERVERTRETER|RECHTSSCHUTZ|wegen\s|Aktenkennz|Aktenzeichen|\n\s*\n|$)',
+            full_text,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        if gegner_section:
+            section_text = gegner_section.group(1)
+
+            # Suche "Eheleute" Format (mit flexiblerem Pattern)
+            eheleute_match = re.search(
+                r'Eheleute\s+([A-Za-zäöüÄÖÜßé][\w\s\-\.]+)',
+                section_text, re.IGNORECASE
+            )
+            if eheleute_match:
+                found_debtor = "Eheleute " + eheleute_match.group(1).strip()
+                # Bereinigen - stoppe bei Adressen oder Nummern
+                found_debtor = re.sub(r'\s*\d{5}.*$', '', found_debtor).strip()
+                found_debtor = re.sub(r'\s*\n.*$', '', found_debtor).strip()
+                if found_debtor and len(found_debtor) > 10:
+                    debtor = found_debtor
+
+            # Suche "Herrn/Frau Name" Format
+            if not debtor or debtor == gegner_kurz:
+                name_match = re.search(
+                    r'(?:Herrn|Frau)\s+([A-Za-zäöüÄÖÜßé][\w\s\-\.]+)',
+                    section_text, re.IGNORECASE
+                )
+                if name_match:
+                    found_debtor = name_match.group(1).strip()
+                    found_debtor = re.sub(r'\s*\d{5}.*$', '', found_debtor).strip()
+                    found_debtor = re.sub(r'\s*\n.*$', '', found_debtor).strip()
+                    if found_debtor:
+                        debtor = found_debtor
+
+            # Fallback: Ersten Namen in Sektion finden (nach GEGNER-Header)
+            if not debtor or debtor == gegner_kurz:
+                # Suche nach Name-Pattern: Vorname Nachname oder nur Nachname
+                name_pattern = re.search(
+                    r'(?:^|\n)\s*([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)?)\s*(?:\n|,|$)',
+                    section_text
+                )
+                if name_pattern:
+                    debtor = name_pattern.group(1).strip()
+
+        # Falls Gegner immer noch nicht gefunden, suche "Eheleute" im gesamten Text
+        if not debtor:
+            eheleute_match = re.search(
+                r'Eheleute\s+([A-Za-zäöüÄÖÜßé][\w\s\-\.]+?)(?:\s*\n|\s+geb\.|\s+\d{5}|$)',
+                full_text, re.IGNORECASE
+            )
+            if eheleute_match:
+                debtor = "Eheleute " + eheleute_match.group(1).strip()
 
         # FALLBACK: Suche Firma mit Rechtsform (GmbH, mbH, etc.) im gesamten Text
         # Breiter Pattern um OCR-Artefakte zu tolerieren
-        # Pattern: beliebiger Text gefolgt von Rechtsform
         firma_matches = []
-        if not creditor:
-            firma_pattern = r'(.{3,60}?(?:GmbH|mbH|AG|KG|OHG|UG|e\.K\.|Co\.\s*KG|& Co\.|Inc\.|Ltd\.|oHG|SE))'
+        if not creditor or creditor == mandant_kurz:
+            firma_pattern = r'([A-Za-zäöüÄÖÜßé][\w\s\-\.&,für]+?(?:GmbH|mbH|AG|KG|OHG|UG|e\.K\.|Co\.\s*KG|& Co\.|Inc\.|Ltd\.|oHG|SE))'
             firma_matches = re.findall(firma_pattern, full_text, re.IGNORECASE)
 
         if not creditor and firma_matches:
@@ -2083,64 +2157,6 @@ def parse_ra_micro_pdf(pdf_file):
                 creditor = re.sub(r'\s+', ' ', creditor).strip()
                 # Entferne führende Zeilenumbrüche und Whitespace
                 creditor = re.sub(r'^[\s\n\r\t]+', '', creditor)
-
-        # Suche GEGNER Sektion für Schuldner
-        # Suche nach "GEGNER" gefolgt von Inhalt bis zum nächsten Marker
-        gegner_section = re.search(
-            r'GEGNER[:\s]*.*?(?=GEGNERVERTRETER|wegen\s|Aktenkennz|$)',
-            full_text,
-            re.DOTALL | re.IGNORECASE
-        )
-
-        if gegner_section:
-            section_text = gegner_section.group(0)
-            # Suche "Eheleute" Format
-            eheleute_match = re.search(
-                r'(Eheleute\s+[A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.]+(?:und|u\.)\s+[A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.]+)',
-                section_text, re.IGNORECASE
-            )
-            if eheleute_match:
-                debtor = eheleute_match.group(1).strip()
-            else:
-                # Suche "Herrn/Frau Name" Format
-                name_match = re.search(
-                    r'(?:Herrn|Frau)\s+([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.]+)',
-                    section_text, re.IGNORECASE
-                )
-                if name_match:
-                    debtor = name_match.group(1).strip()
-
-        # Falls Gegner nicht gefunden, suche "Eheleute" im gesamten Text
-        if not debtor:
-            eheleute_match = re.search(
-                r'(Eheleute\s+[A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.]+(?:und|u\.)\s+[A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\s\-\.]+)',
-                full_text, re.IGNORECASE
-            )
-            if eheleute_match:
-                debtor = eheleute_match.group(1).strip()
-
-        # Adressen extrahieren
-        # Suche alle Adressen (Straße + PLZ + Ort)
-        addr_pattern = r'([A-Za-zäöüÄÖÜß][A-Za-zäöüÄÖÜß\s\-]+(?:straße|str\.?|weg|platz|allee|gasse|ring|damm|ufer)\s*\d+[a-zA-Z]?)\s*\n?\s*(\d{5})\s+([A-Za-zäöüÄÖÜß\-\s]+?)(?:\n|Tel|Fax|E-Mail|Adressnr|Kunden|geb\.|$)'
-        addr_matches = re.findall(addr_pattern, full_text, re.IGNORECASE)
-
-        if len(addr_matches) >= 1 and not creditor_address:
-            creditor_address = f"{addr_matches[0][0].strip()}\n{addr_matches[0][1]} {addr_matches[0][2].strip()}"
-        if len(addr_matches) >= 2 and not debtor_address:
-            debtor_address = f"{addr_matches[1][0].strip()}\n{addr_matches[1][1]} {addr_matches[1][2].strip()}"
-
-        # === METHODE 1: Aktenkurzbezeichnung "Mandant ./. Gegner" (Fallback) ===
-        # Format: "Gehlsen ./. Berg" oder "Müller ./. Schmidt"
-        # Wird nur verwendet wenn AUFTRAGGEBER/GEGNER nicht gefunden wurde
-        mandant_kurz = ""
-        gegner_kurz = ""
-        kurzbezeichnung_match = re.search(
-            r'([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\-\s\.]+?)\s*\./\.\s*([A-Za-zäöüÄÖÜßé][A-Za-zäöüÄÖÜßé\-\s\.]+?)(?:\n|$|\d{1,4}/\d{2})',
-            full_text
-        )
-        if kurzbezeichnung_match:
-            mandant_kurz = kurzbezeichnung_match.group(1).strip()
-            gegner_kurz = kurzbezeichnung_match.group(2).strip()
 
         # === METHODE 2: "Forderung der Firma [Name]" (Fallback) ===
         if not creditor:
