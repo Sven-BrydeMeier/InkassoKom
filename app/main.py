@@ -2727,173 +2727,173 @@ def show_ra_micro_import():
                 # Layout: PDF-Vorschau links, Trennungssteuerung rechts
                 preview_col, control_col = st.columns([1, 1])
 
-            with preview_col:
-                st.markdown("##### 👁️ PDF-Vorschau")
-                # Seitennavigation
-                if 'preview_page' not in st.session_state:
-                    st.session_state.preview_page = 0
+                with preview_col:
+                    st.markdown("##### 👁️ PDF-Vorschau")
+                    # Seitennavigation
+                    if 'preview_page' not in st.session_state:
+                        st.session_state.preview_page = 0
 
-                nav_cols = st.columns([1, 3, 1])
-                with nav_cols[0]:
-                    if st.button("◀️ Zurück", disabled=st.session_state.preview_page == 0):
-                        st.session_state.preview_page -= 1
-                        st.rerun()
-                with nav_cols[1]:
-                    st.session_state.preview_page = st.selectbox(
-                        "Seite",
-                        range(num_pages),
-                        index=st.session_state.preview_page,
-                        format_func=lambda x: f"Seite {x + 1} von {num_pages}",
-                        label_visibility="collapsed"
-                    )
-                with nav_cols[2]:
-                    if st.button("Weiter ▶️", disabled=st.session_state.preview_page >= num_pages - 1):
-                        st.session_state.preview_page += 1
-                        st.rerun()
-
-                # Aktuelle Seite als PDF anzeigen
-                current_page = st.session_state.preview_page
-                is_split_page = current_page in st.session_state.get('manual_splits', []) or current_page == 0
-
-                if is_split_page:
-                    st.success(f"📄 **Seite {current_page + 1}** - Dokumentanfang")
-                else:
-                    st.info(f"📄 Seite {current_page + 1}")
-
-                page_pdf = extract_pdf_pages(pdf_bytes, current_page)
-                if page_pdf:
-                    page_b64 = base64.b64encode(page_pdf).decode('utf-8')
-                    st.markdown(f'''
-                    <iframe
-                        src="data:application/pdf;base64,{page_b64}#toolbar=0&navpanes=0"
-                        width="100%"
-                        height="500px"
-                        style="border: 2px solid {'#28a745' if is_split_page else '#dee2e6'}; border-radius: 5px;">
-                    </iframe>
-                    ''', unsafe_allow_html=True)
-                else:
-                    # Fallback: Ganzes PDF mit Scroll
-                    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-                    st.markdown(f'''
-                    <iframe
-                        src="data:application/pdf;base64,{pdf_base64}#page={current_page + 1}"
-                        width="100%"
-                        height="500px"
-                        style="border: 1px solid #ccc; border-radius: 5px;">
-                    </iframe>
-                    ''', unsafe_allow_html=True)
-
-                # Schnell-Trennung für aktuelle Seite
-                if current_page > 0:
-                    if current_page in st.session_state.get('manual_splits', []):
-                        if st.button(f"✂️ Trennung vor Seite {current_page + 1} entfernen", use_container_width=True):
-                            st.session_state.manual_splits.remove(current_page)
+                    nav_cols = st.columns([1, 3, 1])
+                    with nav_cols[0]:
+                        if st.button("◀️ Zurück", disabled=st.session_state.preview_page == 0):
+                            st.session_state.preview_page -= 1
                             st.rerun()
-                    else:
-                        if st.button(f"➕ Trennung vor Seite {current_page + 1} setzen", use_container_width=True, type="primary"):
-                            if 'manual_splits' not in st.session_state:
-                                st.session_state.manual_splits = []
-                            st.session_state.manual_splits.append(current_page)
-                            st.session_state.manual_splits.sort()
-                            st.rerun()
-
-            with control_col:
-                st.markdown("##### ✂️ Trennungssteuerung")
-                st.caption("Klicken Sie auf Seitennummern, um zur Vorschau zu springen. Setzen Sie Trennstellen mit den Buttons.")
-
-                # Kompakte Seitenübersicht mit Buttons
-                pages_per_row = 8
-
-                for row_start in range(0, num_pages, pages_per_row):
-                    row_end = min(row_start + pages_per_row, num_pages)
-                    cols = st.columns(pages_per_row)
-
-                    for i, page_num in enumerate(range(row_start, row_end)):
-                        with cols[i]:
-                            is_split = page_num in st.session_state.manual_splits or page_num == 0
-                            is_current = page_num == st.session_state.get('preview_page', 0)
-
-                            # Seite als klickbarer Button
-                            btn_type = "primary" if is_current else ("secondary" if not is_split else "secondary")
-                            btn_label = f"{'📄' if is_split else ''}{page_num + 1}"
-
-                            if st.button(
-                                btn_label,
-                                key=f"page_btn_{page_num}",
-                                use_container_width=True,
-                                type=btn_type,
-                                help=f"Seite {page_num + 1} {'(Dokumentanfang)' if is_split else ''}"
-                            ):
-                                st.session_state.preview_page = page_num
-                                st.rerun()
-
-                st.divider()
-
-                # Schnell-Trennungen setzen
-                st.markdown("##### ➕ Trennstellen setzen")
-                st.caption("Wählen Sie Seiten, vor denen ein neues Dokument beginnt:")
-
-                # Dropdown zur Auswahl einer Seite für Trennung
-                available_pages = [p for p in range(1, num_pages) if p not in st.session_state.manual_splits]
-                if available_pages:
-                    split_page = st.selectbox(
-                        "Trennung vor Seite:",
-                        available_pages,
-                        format_func=lambda x: f"Seite {x + 1}",
-                        key="add_split_select"
-                    )
-                    if st.button("➕ Trennung hinzufügen", use_container_width=True, type="primary"):
-                        st.session_state.manual_splits.append(split_page)
-                        st.session_state.manual_splits.sort()
-                        st.rerun()
-                else:
-                    st.info("Alle Seiten sind bereits als Dokumentanfang markiert.")
-
-                # Aktuelle Trennstellen anzeigen
-                if st.session_state.manual_splits:
-                    st.markdown("**Aktuelle Trennstellen:**")
-                    split_cols = st.columns(4)
-                    for i, split_page in enumerate(st.session_state.manual_splits):
-                        with split_cols[i % 4]:
-                            if st.button(f"❌ S.{split_page + 1}", key=f"remove_split_{split_page}", help="Trennung entfernen"):
-                                st.session_state.manual_splits.remove(split_page)
-                                st.rerun()
-
-                st.divider()
-
-                # Zusammenfassung der manuellen Dokumente
-                st.markdown("##### 📋 Resultierende Dokumente")
-
-                # Dokumente aus Trennstellen berechnen
-                all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
-                manual_docs = []
-                for i in range(len(all_splits) - 1):
-                    start_page = all_splits[i]
-                    end_page = all_splits[i + 1] - 1
-                    doc_key = f"manual_doc_{i}"
-                    manual_docs.append({
-                        'id': doc_key,
-                        'start': start_page,
-                        'end': end_page,
-                        'pages': f"{start_page + 1}" if start_page == end_page else f"{start_page + 1}-{end_page + 1}"
-                    })
-
-                st.success(f"📊 {len(manual_docs)} Dokumente werden erstellt")
-
-                # Dokumentnamen bearbeiten
-                for doc in manual_docs:
-                    c1, c2 = st.columns([1, 3])
-                    with c1:
-                        st.markdown(f"**Seiten {doc['pages']}**")
-                    with c2:
-                        default_name = st.session_state.manual_doc_names.get(doc['id'], f"Dokument (Seiten {doc['pages']})")
-                        new_name = st.text_input(
-                            "Name",
-                            value=default_name,
-                            key=f"name_{doc['id']}",
+                    with nav_cols[1]:
+                        st.session_state.preview_page = st.selectbox(
+                            "Seite",
+                            range(num_pages),
+                            index=st.session_state.preview_page,
+                            format_func=lambda x: f"Seite {x + 1} von {num_pages}",
                             label_visibility="collapsed"
                         )
-                        st.session_state.manual_doc_names[doc['id']] = new_name
+                    with nav_cols[2]:
+                        if st.button("Weiter ▶️", disabled=st.session_state.preview_page >= num_pages - 1):
+                            st.session_state.preview_page += 1
+                            st.rerun()
+
+                    # Aktuelle Seite als PDF anzeigen
+                    current_page = st.session_state.preview_page
+                    is_split_page = current_page in st.session_state.get('manual_splits', []) or current_page == 0
+
+                    if is_split_page:
+                        st.success(f"📄 **Seite {current_page + 1}** - Dokumentanfang")
+                    else:
+                        st.info(f"📄 Seite {current_page + 1}")
+
+                    page_pdf = extract_pdf_pages(pdf_bytes, current_page)
+                    if page_pdf:
+                        page_b64 = base64.b64encode(page_pdf).decode('utf-8')
+                        st.markdown(f'''
+                        <iframe
+                            src="data:application/pdf;base64,{page_b64}#toolbar=0&navpanes=0"
+                            width="100%"
+                            height="500px"
+                            style="border: 2px solid {'#28a745' if is_split_page else '#dee2e6'}; border-radius: 5px;">
+                        </iframe>
+                        ''', unsafe_allow_html=True)
+                    else:
+                        # Fallback: Ganzes PDF mit Scroll
+                        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+                        st.markdown(f'''
+                        <iframe
+                            src="data:application/pdf;base64,{pdf_base64}#page={current_page + 1}"
+                            width="100%"
+                            height="500px"
+                            style="border: 1px solid #ccc; border-radius: 5px;">
+                        </iframe>
+                        ''', unsafe_allow_html=True)
+
+                    # Schnell-Trennung für aktuelle Seite
+                    if current_page > 0:
+                        if current_page in st.session_state.get('manual_splits', []):
+                            if st.button(f"✂️ Trennung vor Seite {current_page + 1} entfernen", use_container_width=True):
+                                st.session_state.manual_splits.remove(current_page)
+                                st.rerun()
+                        else:
+                            if st.button(f"➕ Trennung vor Seite {current_page + 1} setzen", use_container_width=True, type="primary"):
+                                if 'manual_splits' not in st.session_state:
+                                    st.session_state.manual_splits = []
+                                st.session_state.manual_splits.append(current_page)
+                                st.session_state.manual_splits.sort()
+                                st.rerun()
+
+                with control_col:
+                    st.markdown("##### ✂️ Trennungssteuerung")
+                    st.caption("Klicken Sie auf Seitennummern, um zur Vorschau zu springen. Setzen Sie Trennstellen mit den Buttons.")
+
+                    # Kompakte Seitenübersicht mit Buttons
+                    pages_per_row = 8
+
+                    for row_start in range(0, num_pages, pages_per_row):
+                        row_end = min(row_start + pages_per_row, num_pages)
+                        cols = st.columns(pages_per_row)
+
+                        for i, page_num in enumerate(range(row_start, row_end)):
+                            with cols[i]:
+                                is_split = page_num in st.session_state.manual_splits or page_num == 0
+                                is_current = page_num == st.session_state.get('preview_page', 0)
+
+                                # Seite als klickbarer Button
+                                btn_type = "primary" if is_current else ("secondary" if not is_split else "secondary")
+                                btn_label = f"{'📄' if is_split else ''}{page_num + 1}"
+
+                                if st.button(
+                                    btn_label,
+                                    key=f"page_btn_{page_num}",
+                                    use_container_width=True,
+                                    type=btn_type,
+                                    help=f"Seite {page_num + 1} {'(Dokumentanfang)' if is_split else ''}"
+                                ):
+                                    st.session_state.preview_page = page_num
+                                    st.rerun()
+
+                    st.divider()
+
+                    # Schnell-Trennungen setzen
+                    st.markdown("##### ➕ Trennstellen setzen")
+                    st.caption("Wählen Sie Seiten, vor denen ein neues Dokument beginnt:")
+
+                    # Dropdown zur Auswahl einer Seite für Trennung
+                    available_pages = [p for p in range(1, num_pages) if p not in st.session_state.manual_splits]
+                    if available_pages:
+                        split_page = st.selectbox(
+                            "Trennung vor Seite:",
+                            available_pages,
+                            format_func=lambda x: f"Seite {x + 1}",
+                            key="add_split_select"
+                        )
+                        if st.button("➕ Trennung hinzufügen", use_container_width=True, type="primary"):
+                            st.session_state.manual_splits.append(split_page)
+                            st.session_state.manual_splits.sort()
+                            st.rerun()
+                    else:
+                        st.info("Alle Seiten sind bereits als Dokumentanfang markiert.")
+
+                    # Aktuelle Trennstellen anzeigen
+                    if st.session_state.manual_splits:
+                        st.markdown("**Aktuelle Trennstellen:**")
+                        split_cols = st.columns(4)
+                        for i, split_page in enumerate(st.session_state.manual_splits):
+                            with split_cols[i % 4]:
+                                if st.button(f"❌ S.{split_page + 1}", key=f"remove_split_{split_page}", help="Trennung entfernen"):
+                                    st.session_state.manual_splits.remove(split_page)
+                                    st.rerun()
+
+                    st.divider()
+
+                    # Zusammenfassung der manuellen Dokumente
+                    st.markdown("##### 📋 Resultierende Dokumente")
+
+                    # Dokumente aus Trennstellen berechnen
+                    all_splits = sorted(set([0] + st.session_state.manual_splits + [num_pages]))
+                    manual_docs = []
+                    for i in range(len(all_splits) - 1):
+                        start_page = all_splits[i]
+                        end_page = all_splits[i + 1] - 1
+                        doc_key = f"manual_doc_{i}"
+                        manual_docs.append({
+                            'id': doc_key,
+                            'start': start_page,
+                            'end': end_page,
+                            'pages': f"{start_page + 1}" if start_page == end_page else f"{start_page + 1}-{end_page + 1}"
+                        })
+
+                    st.success(f"📊 {len(manual_docs)} Dokumente werden erstellt")
+
+                    # Dokumentnamen bearbeiten
+                    for doc in manual_docs:
+                        c1, c2 = st.columns([1, 3])
+                        with c1:
+                            st.markdown(f"**Seiten {doc['pages']}**")
+                        with c2:
+                            default_name = st.session_state.manual_doc_names.get(doc['id'], f"Dokument (Seiten {doc['pages']})")
+                            new_name = st.text_input(
+                                "Name",
+                                value=default_name,
+                                key=f"name_{doc['id']}",
+                                label_visibility="collapsed"
+                            )
+                            st.session_state.manual_doc_names[doc['id']] = new_name
 
                     # Zurücksetzen-Button
                     if st.session_state.manual_splits:
