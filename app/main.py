@@ -2158,26 +2158,39 @@ def parse_ra_micro_pdf(pdf_file):
         # Forderungskonto extrahieren
         bookings = []
 
-        # Hauptforderung suchen
-        amount_patterns = [
-            r'(?:Hauptforderung|Forderung|Rechnungsbetrag|Kaufpreis)[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)',
-            r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)\s*(?:Hauptforderung|Forderung)',
-            r'Summe[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)',
-        ]
-
+        # ============================================================
+        # HAUPTFORDERUNG: Primär aus Parser-money_data verwenden
+        # ============================================================
         hauptforderung = 0.0
-        for pattern in amount_patterns:
-            match = re.search(pattern, full_text, re.IGNORECASE)
-            if match:
-                amount_str = match.group(1).replace('.', '').replace(',', '.')
-                try:
-                    hauptforderung = float(amount_str)
-                    break
-                except ValueError:
-                    continue
 
+        # 1. Versuche aus Parser money_data zu extrahieren
+        if money_data and money_data.get('principal'):
+            principal_data = money_data['principal']
+            if isinstance(principal_data, dict) and 'betrag' in principal_data:
+                hauptforderung = principal_data['betrag']
+            elif isinstance(principal_data, (int, float)):
+                hauptforderung = float(principal_data)
+
+        # 2. Fallback: Pattern-Matching im Text
         if hauptforderung == 0:
-            hauptforderung = 5000.00  # Demo-Fallback
+            amount_patterns = [
+                r'(?:Hauptforderung|Forderung|Rechnungsbetrag|Kaufpreis)[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)',
+                r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)\s*(?:Hauptforderung|Forderung)',
+                r'Summe[:\s]*(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:€|EUR)',
+            ]
+            for pattern in amount_patterns:
+                match = re.search(pattern, full_text, re.IGNORECASE)
+                if match:
+                    amount_str = match.group(1).replace('.', '').replace(',', '.')
+                    try:
+                        hauptforderung = float(amount_str)
+                        break
+                    except ValueError:
+                        continue
+
+        # 3. Fallback: Demo-Wert nur wenn gar nichts gefunden wurde
+        if hauptforderung == 0:
+            hauptforderung = 0.0  # Kein Demo-Fallback mehr - User muss manuell eingeben
 
         bookings.append({
             'date': date.today() - timedelta(60),
@@ -2312,34 +2325,117 @@ def show_ra_micro_import():
         pdf_bytes = uploaded_pdf.getvalue()
         st.session_state.pdf_viewer_content = pdf_bytes
 
+        # Prüfen ob eine neue Datei hochgeladen wurde (Name + Größe als ID)
+        current_pdf_id = f"{uploaded_pdf.name}_{uploaded_pdf.size}"
+        new_pdf_uploaded = st.session_state.get('last_imported_pdf_id') != current_pdf_id
+
         with st.spinner("🔄 PDF wird analysiert..."):
             result = parse_ra_micro_pdf(io.BytesIO(pdf_bytes))
 
         if result['success']:
             st.markdown("### ✅ Analyse erfolgreich!")
 
-            # Vorschau der extrahierten Daten
+            # ================================================================
+            # EDITIERBARE AKTEN-INFORMATIONEN
+            # ================================================================
+            st.markdown("#### 📋 Akten-Informationen (editierbar)")
+            st.caption("Überprüfen und korrigieren Sie die erkannten Daten vor dem Import:")
+
+            # Session State für editierte Werte - bei neuer PDF IMMER aktualisieren
+            if new_pdf_uploaded or 'edit_aktenzeichen' not in st.session_state:
+                st.session_state.edit_aktenzeichen = result['aktenzeichen']
+                st.session_state.edit_creditor = result['creditor']
+                st.session_state.edit_creditor_address = result.get('creditor_address', '')
+                st.session_state.edit_debtor = result['debtor']
+                st.session_state.edit_debtor_address = result.get('debtor_address', '')
+                st.session_state.edit_hauptforderung = result.get('principal', 0.0)
+                st.session_state.last_imported_pdf_id = current_pdf_id
+
             col1, col2 = st.columns(2)
 
             with col1:
-                st.markdown("#### 📋 Akten-Informationen")
-                st.write(f"**Aktenzeichen:** {result['aktenzeichen']}")
-                st.write(f"**Gläubiger (Mandant):** {result['creditor']}")
-                if result.get('creditor_address'):
-                    st.caption(f"   {result['creditor_address']}")
-                st.write(f"**Schuldner (Gegner):** {result['debtor']}")
-                if result.get('debtor_address'):
-                    st.caption(f"   {result['debtor_address']}")
-                st.write(f"**Status:** {result['status'].title()}")
-                st.write(f"**Seiten:** {result['num_pages']}")
+                st.markdown("##### 📁 Akte")
+                edited_az = st.text_input(
+                    "Aktenzeichen",
+                    value=st.session_state.edit_aktenzeichen,
+                    key="input_aktenzeichen",
+                    help="Format: z.B. 23/26 oder 1263/25"
+                )
+                st.session_state.edit_aktenzeichen = edited_az
+
+                st.markdown("##### 👤 Gläubiger (Mandant)")
+                edited_creditor = st.text_input(
+                    "Name des Gläubigers",
+                    value=st.session_state.edit_creditor,
+                    key="input_creditor",
+                    help="Name des Mandanten / der Mandantin"
+                )
+                st.session_state.edit_creditor = edited_creditor
+
+                edited_cred_addr = st.text_area(
+                    "Adresse des Gläubigers",
+                    value=st.session_state.edit_creditor_address,
+                    key="input_creditor_address",
+                    height=80,
+                    help="Straße, PLZ, Ort"
+                )
+                st.session_state.edit_creditor_address = edited_cred_addr
 
             with col2:
-                st.markdown("#### 💰 Forderungskonto")
+                st.markdown("##### 💰 Forderung")
+                edited_hauptforderung = st.number_input(
+                    "Hauptforderung (€)",
+                    value=float(st.session_state.edit_hauptforderung),
+                    min_value=0.0,
+                    step=100.0,
+                    format="%.2f",
+                    key="input_hauptforderung",
+                    help="Hauptforderungsbetrag in Euro"
+                )
+                st.session_state.edit_hauptforderung = edited_hauptforderung
+
+                st.markdown("##### 👥 Schuldner (Gegner)")
+                edited_debtor = st.text_input(
+                    "Name des Schuldners",
+                    value=st.session_state.edit_debtor,
+                    key="input_debtor",
+                    help="Name des Gegners / der Gegnerin"
+                )
+                st.session_state.edit_debtor = edited_debtor
+
+                edited_deb_addr = st.text_area(
+                    "Adresse des Schuldners",
+                    value=st.session_state.edit_debtor_address,
+                    key="input_debtor_address",
+                    height=80,
+                    help="Straße, PLZ, Ort"
+                )
+                st.session_state.edit_debtor_address = edited_deb_addr
+
+            # Info-Box mit Zusammenfassung
+            st.divider()
+            summary_col1, summary_col2 = st.columns(2)
+            with summary_col1:
+                st.info(f"""
+                **Zusammenfassung:**
+                - Aktenzeichen: **{edited_az}**
+                - Gläubiger: **{edited_creditor}**
+                - Schuldner: **{edited_debtor}**
+                """)
+            with summary_col2:
+                # Forderungskonto Übersicht
                 total_soll = sum(b['amount'] for b in result['bookings'] if b['type'] == 'S')
                 total_haben = sum(b['amount'] for b in result['bookings'] if b['type'] == 'H')
-                st.metric("Soll (Forderungen)", fmt_curr(total_soll))
-                st.metric("Haben (Zahlungen)", fmt_curr(total_haben))
-                st.metric("Offener Betrag", fmt_curr(total_soll - total_haben))
+                # Aktualisiere mit editierter Hauptforderung
+                if edited_hauptforderung != result.get('principal', 0):
+                    total_soll = edited_hauptforderung + (total_soll - result.get('principal', 0))
+                st.success(f"""
+                **Forderung:**
+                - Hauptforderung: **{fmt_curr(edited_hauptforderung)}**
+                - Gesamtforderung: **{fmt_curr(total_soll)}**
+                - Zahlungen: **{fmt_curr(total_haben)}**
+                - **Offen: {fmt_curr(total_soll - total_haben)}**
+                """)
 
             st.divider()
 
@@ -2843,19 +2939,19 @@ def show_ra_micro_import():
                                 if single_page:
                                     doc_pdfs[doc['id']] = single_page
 
-                    # Neue Akte erstellen
+                    # Neue Akte erstellen - EDITIERTE WERTE verwenden!
                     new_case = {
                         'id': temp_case_id,
-                        'nr': result['aktenzeichen'],
-                        'creditor': result['creditor'],
-                        'debtor': result['debtor'],
-                        'creditor_address': result.get('creditor_address', ''),
-                        'debtor_address': result.get('debtor_address', ''),
+                        'nr': st.session_state.get('edit_aktenzeichen', result['aktenzeichen']),
+                        'creditor': st.session_state.get('edit_creditor', result['creditor']),
+                        'debtor': st.session_state.get('edit_debtor', result['debtor']),
+                        'creditor_address': st.session_state.get('edit_creditor_address', result.get('creditor_address', '')),
+                        'debtor_address': st.session_state.get('edit_debtor_address', result.get('debtor_address', '')),
                         'subject': f'Import aus RA-Micro - {uploaded_pdf.name}',
                         'status': result['status'],
                         'dunning': result['dunning'],
                         'enforcement': result['enforcement'],
-                        'principal': result['principal'],
+                        'principal': st.session_state.get('edit_hauptforderung', result['principal']),
                         'interest': 5.0,
                         'due_date': date.today() - timedelta(days=60),
                         'created': datetime.now(),
@@ -2869,8 +2965,21 @@ def show_ra_micro_import():
                         'mahnung_dates': [],
                     }
 
+                    # Buchungen mit editierter Hauptforderung aktualisieren
+                    edited_bookings = []
+                    edited_hauptforderung = st.session_state.get('edit_hauptforderung', result['principal'])
+                    for booking in result['bookings']:
+                        if booking.get('cat') == 'Hauptforderung':
+                            # Hauptforderung mit editiertem Wert ersetzen
+                            edited_bookings.append({
+                                **booking,
+                                'amount': edited_hauptforderung
+                            })
+                        else:
+                            edited_bookings.append(booking)
+
                     # In Datenbank speichern
-                    new_case_id = save_case_to_db(new_case, documents_to_import, result['bookings'])
+                    new_case_id = save_case_to_db(new_case, documents_to_import, edited_bookings)
 
                     # PDFs in Session State für Anzeige speichern
                     for doc_id, doc_pdf in doc_pdfs.items():
@@ -2878,8 +2987,16 @@ def show_ra_micro_import():
                     st.session_state.case_full_pdfs[new_case_id] = pdf_bytes
 
                     num_docs = len(doc_pdfs) if doc_pdfs else len(documents_to_import)
-                    st.success(f"✅ Akte {result['aktenzeichen']} mit {num_docs} Dokumenten in Datenbank gespeichert!")
+                    edited_az = st.session_state.get('edit_aktenzeichen', result['aktenzeichen'])
+                    st.success(f"✅ Akte {edited_az} mit {num_docs} Dokumenten in Datenbank gespeichert!")
                     st.balloons()
+
+                    # Session State für editierte Werte zurücksetzen (für nächsten Import)
+                    for key in ['edit_aktenzeichen', 'edit_creditor', 'edit_creditor_address',
+                                'edit_debtor', 'edit_debtor_address', 'edit_hauptforderung',
+                                'last_imported_pdf_id']:
+                        if key in st.session_state:
+                            del st.session_state[key]
 
                     # Zur Aktenübersicht wechseln
                     st.session_state.page = 'cases'
