@@ -224,11 +224,20 @@ def _extract_contacts(block: str) -> Dict[str, List[str]]:
 
 
 def parse_cover_page(cover_text: str) -> Dict[str, Any]:
+    """
+    Parst ein RA-Micro Aktenvorblatt und extrahiert Parteien.
+
+    RA-Micro Struktur:
+    - AUFTRAGGEBER: ... Mandant-Daten (Firma, Adresse, Kontakt) ... GEGNERVERTRETER:
+    - GEGNERVERTRETER: ... Gegner-Daten (Firma, Adresse, Kontakt) ...
+
+    Der Mandant ist der Gläubiger, der Gegner ist der Schuldner.
+    """
     cover_text = _normalize_spaces(cover_text)
 
     # Aktenzeichen (Aktennr) + Kurzbezeichnung
     aktenzeichen = None
-    m = re.search(r"Aktennr\.?:\s*([0-9]{3,5}/[0-9]{2})", cover_text)
+    m = re.search(r"Aktennr\.?:\s*([0-9]{1,5}/[0-9]{2})", cover_text)
     if m:
         aktenzeichen = m.group(1)
     if aktenzeichen is None:
@@ -237,57 +246,170 @@ def parse_cover_page(cover_text: str) -> Dict[str, Any]:
 
     # Kurzbezeichnung: häufig "X ./. Y"
     kurz = None
+    kurz_mandant = None
+    kurz_gegner = None
     m3 = re.search(r"([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\s\-\.]+?)\s*\./\.\s*([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\s\-\.]+?)(?:\s|\n|$)", cover_text)
     if m3:
-        kurz = f"{m3.group(1).strip()} ./. {m3.group(2).strip()}"
+        kurz_mandant = m3.group(1).strip()
+        kurz_gegner = m3.group(2).strip()
+        kurz = f"{kurz_mandant} ./. {kurz_gegner}"
 
-    # Parteienblöcke
-    auftraggeber_block = _extract_block(
-        cover_text,
-        "AUFTRAGGEBER",
-        end_labels=["GEGNERVERTRETER", "GEGNER"],
-    ) or ""
+    # ============================================================
+    # RA-MICRO STRUKTUR: Teile Text bei GEGNERVERTRETER
+    # ============================================================
+    # Alles VOR "GEGNERVERTRETER:" gehört zum MANDANT (Gläubiger)
+    # Alles NACH "GEGNERVERTRETER:" gehört zum GEGNER (Schuldner)
 
-    gegner_block = _extract_block(
-        cover_text,
-        "GEGNER",
-        end_labels=["GEGNERVERTRETER", "GEGENSTANDSWERT", "RECHTSSCHUTZ", "TERMINE", "FRISTEN", "Aktennr", "Aktenzeichen"],
-    ) or ""
+    mandant_section = ""
+    gegner_section = ""
 
-    # Auftraggeber (Mandant/Gläubiger)
-    ag_name = _pick_name(auftraggeber_block, prefer=["GmbH", "mbH", "AG", "KG", "UG", "Reno", "Gesellschaft"])
-    ag_street, ag_plz, ag_ort = _extract_address(auftraggeber_block)
-    ag_contacts = _extract_contacts(auftraggeber_block)
+    # Finde GEGNERVERTRETER Position
+    gegnervertreter_pos = cover_text.find("GEGNERVERTRETER")
+    if gegnervertreter_pos == -1:
+        # Fallback: Suche nach "GEGNER:" (ohne VERTRETER)
+        gegner_match = re.search(r'\bGEGNER\s*:', cover_text)
+        if gegner_match:
+            gegnervertreter_pos = gegner_match.start()
+
+    if gegnervertreter_pos > 0:
+        mandant_section = cover_text[:gegnervertreter_pos]
+        gegner_section = cover_text[gegnervertreter_pos:]
+    else:
+        # Kein GEGNERVERTRETER gefunden - alles ist Mandant-Sektion
+        mandant_section = cover_text
+
+    # ============================================================
+    # MANDANT/GLÄUBIGER EXTRAHIEREN
+    # ============================================================
+    # Suche Firma mit Rechtsform (GmbH, KG, etc.) in Mandant-Sektion
+    legal_forms = r'(?:GmbH|mbH|AG|KG|OHG|UG|e\.?K\.?|Co\.\s*KG|& Co\.|Inc\.|Ltd\.|oHG|SE|eG)'
+
+    # Pattern: Firmenname mit Rechtsform - nur innerhalb einer Zeile (keine Zeilenumbrüche)
+    # [^\n] statt \s um Zeilenumbrüche auszuschließen
+    firma_pattern = rf'([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß \t\-\.\&\,\"\']+\s*{legal_forms})'
+
+    mandant_name = None
+    mandant_firmen = re.findall(firma_pattern, mandant_section, re.IGNORECASE | re.MULTILINE)
+
+    # Filtere ungültige Matches
+    valid_firmen = []
+    for firma in mandant_firmen:
+        firma_clean = firma.strip()
+        # Ignoriere wenn es ein Label ist (AUFTRAGGEBER matcht fälschlicherweise wegen "AG")
+        firma_upper = firma_clean.upper()
+        if any(label in firma_upper for label in ['AUFTRAGGEBER', 'GEGNER', 'RECHTSSCHUTZ', 'VERTRETER']):
+            continue
+        # Ignoriere wenn es "AUFTRAG" ist (Teil von AUFTRAGGEBER durch "AG"-Match)
+        if firma_upper in ['AUFTRAG', 'AUFTRA', 'GEGNERVERT']:
+            continue
+        # Ignoriere wenn es Teil der Kurzbezeichnung ist (enthält ./.)
+        if './.' in firma_clean:
+            continue
+        # Ignoriere zu kurze Namen (weniger als 5 Zeichen vor Rechtsform)
+        name_part = re.sub(rf'\s*{legal_forms}.*$', '', firma_clean, flags=re.IGNORECASE).strip()
+        if len(name_part) < 5:
+            continue
+        # Ignoriere wenn der Name aus der Kurzbezeichnung stammt (kurz_gegner am Anfang)
+        if kurz_gegner and firma_clean.startswith(kurz_gegner):
+            continue
+        valid_firmen.append(firma_clean)
+
+    if valid_firmen:
+        # Nimm die erste gültige Firma (typischerweise der Mandant)
+        mandant_name = valid_firmen[0].strip()
+        # Bereinige: Entferne führende Sonderzeichen
+        mandant_name = re.sub(r'^[\s\-\.\,\:]+', '', mandant_name)
+        # Entferne Email-Domains die versehentlich mitgematcht wurden
+        mandant_name = re.sub(r'^[a-zA-Z0-9\.\-\_]+@[a-zA-Z0-9\.\-]+\s*\n?\s*', '', mandant_name)
+        mandant_name = re.sub(r'^[a-zA-Z0-9\.\-]+\.[a-z]{2,4}\s*\n?\s*', '', mandant_name)
+        mandant_name = mandant_name.strip()
+
+    # Fallback: Nutze Kurzbezeichnung
+    if not mandant_name and kurz_mandant:
+        # Suche vollständigen Namen basierend auf Kurzbezeichnung
+        for firma in mandant_firmen if mandant_firmen else []:
+            if kurz_mandant.lower() in firma.lower():
+                mandant_name = firma.strip()
+                break
+        if not mandant_name:
+            mandant_name = kurz_mandant
+
+    # Extrahiere Adresse und Kontakte aus Mandant-Sektion
+    mandant_street, mandant_plz, mandant_ort = _extract_address(mandant_section)
+    mandant_contacts = _extract_contacts(mandant_section)
 
     claimant = Party(
         rolle="Mandantin/Gläubigerin",
-        name=ag_name,
-        street=ag_street,
-        plz=ag_plz,
-        ort=ag_ort,
-        telefon=ag_contacts["telefon"],
-        mobil=ag_contacts["mobil"],
-        fax=ag_contacts["fax"],
-        email=ag_contacts["email"],
-        raw=auftraggeber_block.strip() or None,
+        name=mandant_name,
+        street=mandant_street,
+        plz=mandant_plz,
+        ort=mandant_ort,
+        telefon=mandant_contacts["telefon"],
+        mobil=mandant_contacts["mobil"],
+        fax=mandant_contacts["fax"],
+        email=mandant_contacts["email"],
+        raw=mandant_section.strip() or None,
     )
 
-    # Gegner (Schuldner)
-    g_name = _pick_name(gegner_block, prefer=["Eheleute", "Herrn", "Frau", "Nikusch"])
-    g_street, g_plz, g_ort = _extract_address(gegner_block)
-    g_contacts = _extract_contacts(gegner_block)
+    # ============================================================
+    # GEGNER/SCHULDNER EXTRAHIEREN
+    # ============================================================
+    # Erweitertes Pattern für Firmen mit "& Co. KG" etc. (nur innerhalb einer Zeile)
+    firma_pattern_full = rf'([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß \t\-\.\&\,\"\']+\s*{legal_forms}(?:\s*\&\s*Co\.?\s*KG)?)'
+
+    gegner_name = None
+    gegner_firmen = re.findall(firma_pattern_full, gegner_section, re.IGNORECASE | re.MULTILINE)
+
+    # Filtere ungültige Matches
+    valid_gegner_firmen = []
+    for firma in gegner_firmen:
+        firma_clean = firma.strip()
+        # Ignoriere wenn es ein Label ist
+        if any(label in firma_clean.upper() for label in ['AUFTRAGGEBER', 'GEGNERVERTRETER', 'RECHTSSCHUTZ']):
+            continue
+        # Ignoriere zu kurze Namen
+        name_part = re.sub(rf'\s*{legal_forms}.*$', '', firma_clean, flags=re.IGNORECASE).strip()
+        if len(name_part) < 3:
+            continue
+        valid_gegner_firmen.append(firma_clean)
+
+    if valid_gegner_firmen:
+        gegner_name = valid_gegner_firmen[0].strip()
+        gegner_name = re.sub(r'^[\s\-\.\,\:]+', '', gegner_name)
+
+    # Fallback: Suche nach Personennamen (Eheleute, Herrn, Frau)
+    if not gegner_name:
+        person_match = re.search(
+            r'((?:Eheleute|Herrn|Frau)\s+[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß\s\-\.]+?)(?:\n|$|geb\.|Tel|\d{5})',
+            gegner_section, re.IGNORECASE
+        )
+        if person_match:
+            gegner_name = person_match.group(1).strip()
+
+    # Fallback: Nutze Kurzbezeichnung
+    if not gegner_name and kurz_gegner:
+        for firma in valid_gegner_firmen if valid_gegner_firmen else []:
+            if kurz_gegner.lower() in firma.lower():
+                gegner_name = firma.strip()
+                break
+        if not gegner_name:
+            gegner_name = kurz_gegner
+
+    # Extrahiere Adresse und Kontakte aus Gegner-Sektion
+    gegner_street, gegner_plz, gegner_ort = _extract_address(gegner_section)
+    gegner_contacts = _extract_contacts(gegner_section)
 
     defendant = Party(
         rolle="Gegner/Schuldner",
-        name=g_name,
-        street=g_street,
-        plz=g_plz,
-        ort=g_ort,
-        telefon=g_contacts["telefon"],
-        mobil=g_contacts["mobil"],
-        fax=g_contacts["fax"],
-        email=g_contacts["email"],
-        raw=gegner_block.strip() or None,
+        name=gegner_name,
+        street=gegner_street,
+        plz=gegner_plz,
+        ort=gegner_ort,
+        telefon=gegner_contacts["telefon"],
+        mobil=gegner_contacts["mobil"],
+        fax=gegner_contacts["fax"],
+        email=gegner_contacts["email"],
+        raw=gegner_section.strip() or None,
     )
 
     return {
